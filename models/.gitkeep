@@ -1,0 +1,3 @@
+# Model files directory
+# GGUF models are downloaded here but excluded from git
+# Run ./download.sh to fetch the default model
