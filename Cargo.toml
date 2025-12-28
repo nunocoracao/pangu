@@ -7,8 +7,9 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-# LLM Backend - mistral.rs (pure Rust, candle-based, supports Mistral 3 family including Devstral)
-mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }
+# HTTP Client for llama-server backend
+reqwest = { version = "0.12", features = ["json", "stream"] }
+tokio-stream = "0.1"
 
 # TUI Framework
 ratatui = "0.29"
@@ -41,8 +42,6 @@ chrono = "0.4"
 
 [features]
 default = []
-metal = ["mistralrs/metal"]
-cuda = ["mistralrs/cuda"]
 
 [profile.release]
 lto = true

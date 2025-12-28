@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use app::App;
-use model::{ChatMessage, InferenceConfig, MistralBackend, ModelBackend, ModelParams, StreamEvent};
+use model::{ChatMessage, InferenceConfig, LlamaServerBackend, ModelBackend, ModelParams, StreamEvent};
 use tui::{ui, Event, EventHandler};
 use update::{apply_action, handle_event};
 
@@ -41,14 +41,17 @@ async fn main() -> Result<()> {
     // Initialize error handling
     color_eyre::install()?;
 
-    // Initialize logging (to file to not interfere with TUI)
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "pangu=info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
-        .init();
+    // Initialize logging to file (stderr would corrupt TUI)
+    let log_file = std::fs::File::create("pangu.log").ok();
+    if let Some(file) = log_file {
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "pangu=info".into()),
+            )
+            .with(tracing_subscriber::fmt::layer().with_writer(std::sync::Mutex::new(file)))
+            .init();
+    }
 
     // Parse CLI arguments
     let cli = Cli::parse();
@@ -79,17 +82,17 @@ async fn main() -> Result<()> {
         context_size: settings.model.context_size,
     };
 
-    let model: Arc<Mutex<Option<MistralBackend>>> = Arc::new(Mutex::new(None));
+    let model: Arc<Mutex<Option<LlamaServerBackend>>> = Arc::new(Mutex::new(None));
     let model_clone = model.clone();
     let event_tx_clone = event_tx.clone();
 
     // Spawn model loading task
     tokio::task::spawn_blocking(move || {
-        match MistralBackend::load(&model_path, model_params) {
+        match LlamaServerBackend::load(&model_path, model_params) {
             Ok(loaded_model) => {
                 let mut guard = model_clone.lock().unwrap();
                 *guard = Some(loaded_model);
-                let _ = event_tx_clone.send(Event::Tick); // Trigger UI update
+                let _ = event_tx_clone.send(Event::Render); // Force UI redraw
             }
             Err(e) => {
                 let _ = event_tx_clone.send(Event::StreamError(format!("Failed to load model: {}", e)));
@@ -112,6 +115,8 @@ async fn main() -> Result<()> {
             let guard = model.lock().unwrap();
             if guard.is_some() && matches!(app.state, app::AppState::Loading) {
                 app.set_idle();
+                // Force full terminal redraw after model loads
+                terminal.clear()?;
             }
         }
 
