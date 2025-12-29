@@ -17,7 +17,8 @@ const SERVER_HOST: &str = "127.0.0.1";
 
 /// llama-server HTTP backend
 pub struct LlamaServerBackend {
-    _server_process: Child,
+    /// Server process - only Some if we spawned it
+    server_process: Option<Child>,
     client: Client,
     base_url: String,
     info: ModelInfo,
@@ -96,6 +97,15 @@ impl LlamaServerBackend {
 
         Err(ModelError::LoadError("llama-server failed to start within 60 seconds".to_string()))
     }
+
+    /// Check if server is already running
+    async fn check_server_running(client: &Client, base_url: &str) -> bool {
+        let health_url = format!("{}/health", base_url);
+        match client.get(&health_url).send().await {
+            Ok(resp) => resp.status().is_success(),
+            Err(_) => false,
+        }
+    }
 }
 
 impl ModelBackend for LlamaServerBackend {
@@ -109,65 +119,74 @@ impl ModelBackend for LlamaServerBackend {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "unknown".to_string());
 
-        // Find llama-server binary - check multiple locations
-        let possible_paths = [
-            std::path::PathBuf::from("./bin/llama-server"),
-            std::path::PathBuf::from("bin/llama-server"),
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|p| p.join("llama-server")))
-                .unwrap_or_default(),
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().and_then(|p| p.parent()).map(|p| p.join("bin/llama-server")))
-                .unwrap_or_default(),
-        ];
-
-        let server_path = possible_paths
-            .iter()
-            .find(|p| p.exists())
-            .cloned()
-            .ok_or_else(|| {
-                ModelError::LoadError(format!(
-                    "llama-server not found. Checked: {:?}. Please build llama.cpp and copy llama-server to bin/",
-                    possible_paths
-                ))
-            })?;
-
-        // Build command arguments
-        let mut cmd = Command::new(&server_path);
-        cmd.arg("--model").arg(&model_path)
-           .arg("--host").arg(SERVER_HOST)
-           .arg("--port").arg(SERVER_PORT.to_string())
-           .arg("--ctx-size").arg(params.context_size.to_string());
-
-        // GPU layers
-        if params.n_gpu_layers != 0 {
-            let layers = if params.n_gpu_layers < 0 { 999 } else { params.n_gpu_layers };
-            cmd.arg("--n-gpu-layers").arg(layers.to_string());
-        }
-
-        // Suppress server output
-        cmd.stdout(Stdio::null())
-           .stderr(Stdio::null());
-
-        tracing::info!("Starting llama-server with model: {}", model_path);
-
-        let server_process = cmd
-            .spawn()
-            .map_err(|e| ModelError::LoadError(format!("Failed to spawn llama-server: {}", e)))?;
-
         let client = Client::new();
         let base_url = format!("http://{}:{}", SERVER_HOST, SERVER_PORT);
 
-        // Wait for server to be ready (blocking)
+        // Check if server is already running (another tab might have started it)
         let rt = tokio::runtime::Handle::current();
-        rt.block_on(Self::wait_for_server(&client, &base_url))?;
+        let server_already_running = rt.block_on(Self::check_server_running(&client, &base_url));
 
-        tracing::info!("llama-server started successfully");
+        let server_process = if server_already_running {
+            tracing::info!("Found existing llama-server, connecting to it");
+            None
+        } else {
+            // Find llama-server binary - check multiple locations
+            let possible_paths = [
+                std::path::PathBuf::from("./bin/llama-server"),
+                std::path::PathBuf::from("bin/llama-server"),
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|p| p.join("llama-server")))
+                    .unwrap_or_default(),
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().and_then(|p| p.parent()).map(|p| p.join("bin/llama-server")))
+                    .unwrap_or_default(),
+            ];
+
+            let server_path = possible_paths
+                .iter()
+                .find(|p| p.exists())
+                .cloned()
+                .ok_or_else(|| {
+                    ModelError::LoadError(format!(
+                        "llama-server not found. Checked: {:?}. Please build llama.cpp and copy llama-server to bin/",
+                        possible_paths
+                    ))
+                })?;
+
+            // Build command arguments
+            let mut cmd = Command::new(&server_path);
+            cmd.arg("--model").arg(&model_path)
+               .arg("--host").arg(SERVER_HOST)
+               .arg("--port").arg(SERVER_PORT.to_string())
+               .arg("--ctx-size").arg(params.context_size.to_string());
+
+            // GPU layers
+            if params.n_gpu_layers != 0 {
+                let layers = if params.n_gpu_layers < 0 { 999 } else { params.n_gpu_layers };
+                cmd.arg("--n-gpu-layers").arg(layers.to_string());
+            }
+
+            // Suppress server output
+            cmd.stdout(Stdio::null())
+               .stderr(Stdio::null());
+
+            tracing::info!("Starting llama-server with model: {}", model_path);
+
+            let process = cmd
+                .spawn()
+                .map_err(|e| ModelError::LoadError(format!("Failed to spawn llama-server: {}", e)))?;
+
+            // Wait for server to be ready
+            rt.block_on(Self::wait_for_server(&client, &base_url))?;
+
+            tracing::info!("llama-server started successfully");
+            Some(process)
+        };
 
         Ok(Self {
-            _server_process: server_process,
+            server_process,
             client,
             base_url,
             info: ModelInfo {
@@ -283,8 +302,12 @@ impl ModelBackend for LlamaServerBackend {
 
 impl Drop for LlamaServerBackend {
     fn drop(&mut self) {
-        // Kill the server process when backend is dropped
-        tracing::info!("Shutting down llama-server");
-        let _ = self._server_process.kill();
+        // Only kill the server if we spawned it (not if we connected to existing)
+        if let Some(ref mut process) = self.server_process {
+            tracing::info!("Shutting down llama-server");
+            let _ = process.kill();
+        } else {
+            tracing::info!("Disconnecting from shared llama-server (not killing)");
+        }
     }
 }

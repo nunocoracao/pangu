@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers, MouseEventKind};
 
 use crate::action::Action;
 use crate::app::{App, AppState};
@@ -10,7 +10,7 @@ pub fn handle_event(app: &mut App, event: Event) -> Action {
         Event::Quit => Action::Quit,
 
         Event::Key(key) => {
-            // Don't process input while generating
+            // Block all input while generating (model is busy)
             if matches!(app.state, AppState::Generating) {
                 return Action::None;
             }
@@ -29,7 +29,14 @@ pub fn handle_event(app: &mut App, event: Event) -> Action {
                 // Forward to input box
                 _ => {
                     if let Some(text) = app.input_box.handle_input(key) {
-                        Action::SubmitMessage(text)
+                        // Only allow submission if model is ready
+                        if app.model_ready {
+                            Action::SubmitMessage(text)
+                        } else {
+                            // Put the text back since we can't submit
+                            app.input_box.set_text(&text);
+                            Action::None
+                        }
                     } else {
                         Action::None
                     }
@@ -40,6 +47,12 @@ pub fn handle_event(app: &mut App, event: Event) -> Action {
         Event::StreamToken(token) => Action::AppendToken(token),
         Event::StreamDone => Action::FinishStreaming,
         Event::StreamError(error) => Action::SetError(error),
+
+        Event::Mouse(mouse) => match mouse.kind {
+            MouseEventKind::ScrollUp => Action::ScrollUp(3),
+            MouseEventKind::ScrollDown => Action::ScrollDown(3),
+            _ => Action::None,
+        },
 
         _ => Action::None,
     }

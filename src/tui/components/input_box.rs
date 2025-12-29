@@ -26,18 +26,23 @@ impl InputBox {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray))
-                .title(" Message (Enter to send, Shift+Enter for newline) "),
+                .title(" Message (Enter to send, Alt+Enter for newline) "),
         );
         Self { textarea }
     }
 
     /// Handle keyboard input
     ///
-    /// Returns Some(text) if the user submitted the message (Enter without Shift)
+    /// Returns Some(text) if the user submitted the message (Enter without Alt)
     pub fn handle_input(&mut self, key: KeyEvent) -> Option<String> {
         match key.code {
-            // Enter without shift = submit
-            KeyCode::Enter if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+            // Alt+Enter = insert newline (more reliable than Shift+Enter in terminals)
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.textarea.insert_newline();
+                None
+            }
+            // Enter without Alt = submit
+            KeyCode::Enter => {
                 let text = self.textarea.lines().join("\n");
                 if text.trim().is_empty() {
                     return None;
@@ -49,7 +54,7 @@ impl InputBox {
                     Block::default()
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(Color::DarkGray))
-                        .title(" Message (Enter to send, Shift+Enter for newline) "),
+                        .title(" Message (Enter to send, Alt+Enter for newline) "),
                 );
                 Some(text)
             }
@@ -64,6 +69,19 @@ impl InputBox {
     /// Get the current input text
     pub fn text(&self) -> String {
         self.textarea.lines().join("\n")
+    }
+
+    /// Set the input text
+    pub fn set_text(&mut self, text: &str) {
+        // Clear and set new text
+        self.textarea = TextArea::from(text.lines().collect::<Vec<_>>());
+        self.textarea.set_cursor_line_style(Style::default());
+        self.textarea.set_block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title(" Message (Enter to send, Alt+Enter for newline) "),
+        );
     }
 
     /// Check if the input is empty

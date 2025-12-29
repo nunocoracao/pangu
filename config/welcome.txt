@@ -1,0 +1,18 @@
+
+    ██████╗  █████╗ ███╗   ██╗ ██████╗ ██╗   ██╗
+    ██╔══██╗██╔══██╗████╗  ██║██╔════╝ ██║   ██║
+    ██████╔╝███████║██╔██╗ ██║██║  ███╗██║   ██║
+    ██╔═══╝ ██╔══██║██║╚██╗██║██║   ██║██║   ██║
+    ██║     ██║  ██║██║ ╚████║╚██████╔╝╚██████╔╝
+    ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝  ╚═════╝
+
+    Your local AI coding assistant
+
+    Type a message below to start chatting.
+    I can help you with:
+
+    • Writing and debugging code
+    • Explaining complex concepts
+    • Reviewing and improving code
+    • Answering programming questions
+

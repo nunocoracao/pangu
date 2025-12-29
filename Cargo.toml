@@ -40,6 +40,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Utilities
 chrono = "0.4"
 
+# Markdown rendering
+pulldown-cmark = "0.10"
+syntect = "5"
+
 [features]
 default = []
 

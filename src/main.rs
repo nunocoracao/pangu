@@ -113,8 +113,11 @@ async fn main() -> Result<()> {
         // Check if model is loaded
         {
             let guard = model.lock().unwrap();
-            if guard.is_some() && matches!(app.state, app::AppState::Loading) {
-                app.set_idle();
+            if guard.is_some() && !app.model_ready {
+                app.set_model_ready();
+                if matches!(app.state, app::AppState::Loading) {
+                    app.set_idle();
+                }
                 // Force full terminal redraw after model loads
                 terminal.clear()?;
             }
@@ -124,7 +127,7 @@ async fn main() -> Result<()> {
         if let Some(event) = events.next().await {
             match event {
                 Event::Render => {
-                    terminal.draw(|frame| ui::draw(frame, &app))?;
+                    terminal.draw(|frame| ui::draw(frame, &mut app))?;
                 }
                 Event::Tick => {
                     app.tick();

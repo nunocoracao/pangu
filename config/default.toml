@@ -19,12 +19,9 @@ frame_rate = 30.0
 tick_rate = 4.0
 
 [system]
-# System prompt for the assistant
-prompt = """You are Pangu, a helpful coding assistant running locally. You assist with software engineering tasks including writing code, debugging, explaining code, and file operations.
-
-Guidelines:
-- Be concise and direct
-- Provide working code, not pseudocode
-- Explain your reasoning when helpful
-- Ask clarifying questions when requirements are ambiguous
-- Prioritize correctness over cleverness"""
+# Path to a file containing the system prompt (takes precedence over inline prompt)
+prompt_file = "./config/system_prompt.txt"
+# Path to a file containing the welcome message (ASCII art)
+welcome_file = "./config/welcome.txt"
+# Alternatively, you can specify the prompt inline:
+# prompt = "Your system prompt here..."

@@ -1,4 +1,4 @@
-use crate::config::Settings;
+use crate::config::{load_welcome_message, Settings};
 use crate::model::ChatMessage;
 use crate::tui::components::InputBox;
 
@@ -19,6 +19,10 @@ impl AppState {
     pub fn is_generating(&self) -> bool {
         matches!(self, AppState::Generating)
     }
+
+    pub fn is_loading(&self) -> bool {
+        matches!(self, AppState::Loading)
+    }
 }
 
 /// Main application state (TEA Model)
@@ -35,24 +39,23 @@ pub struct App {
     pub scroll_offset: u16,
     /// Whether to quit the application
     pub should_quit: bool,
-    /// Model name for display
-    pub model_name: String,
-    /// System prompt
-    pub system_prompt: String,
     /// Tick counter for animations
     pub tick: u64,
+    /// Auto-scroll to bottom when new content arrives
+    pub auto_scroll: bool,
+    /// Total content height (for scroll calculations)
+    pub content_height: u16,
+    /// Visible area height
+    pub view_height: u16,
+    /// Welcome message to display when chat is empty
+    pub welcome_message: String,
+    /// Whether the model is ready for inference
+    pub model_ready: bool,
 }
 
 impl App {
     /// Create a new application with the given settings
     pub fn new(settings: &Settings) -> Self {
-        let model_name = settings
-            .model
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Unknown".to_string());
-
         Self {
             state: AppState::Loading,
             messages: vec![ChatMessage::system(&settings.system.prompt)],
@@ -60,10 +63,18 @@ impl App {
             input_box: InputBox::new(),
             scroll_offset: 0,
             should_quit: false,
-            model_name,
-            system_prompt: settings.system.prompt.clone(),
             tick: 0,
+            auto_scroll: true,
+            content_height: 0,
+            view_height: 0,
+            welcome_message: load_welcome_message(settings),
+            model_ready: false,
         }
+    }
+
+    /// Mark the model as ready
+    pub fn set_model_ready(&mut self) {
+        self.model_ready = true;
     }
 
     /// Increment tick counter (for animations)
@@ -110,17 +121,41 @@ impl App {
     /// Scroll up in the chat view
     pub fn scroll_up(&mut self, amount: u16) {
         self.scroll_offset = self.scroll_offset.saturating_sub(amount);
+        // Disable auto-scroll when user scrolls up
+        self.auto_scroll = false;
     }
 
     /// Scroll down in the chat view
     pub fn scroll_down(&mut self, amount: u16) {
         self.scroll_offset = self.scroll_offset.saturating_add(amount);
+        // Re-enable auto-scroll if we're at the bottom
+        let max_scroll = self.content_height.saturating_sub(self.view_height);
+        if self.scroll_offset >= max_scroll {
+            self.scroll_offset = max_scroll;
+            self.auto_scroll = true;
+        }
+    }
+
+    /// Update content and view dimensions
+    pub fn update_dimensions(&mut self, content_height: u16, view_height: u16) {
+        self.content_height = content_height;
+        self.view_height = view_height;
+
+        // Auto-scroll to bottom if enabled
+        if self.auto_scroll {
+            let max_scroll = content_height.saturating_sub(view_height);
+            self.scroll_offset = max_scroll;
+        } else {
+            // Clamp scroll offset to valid range
+            let max_scroll = content_height.saturating_sub(view_height);
+            self.scroll_offset = self.scroll_offset.min(max_scroll);
+        }
     }
 
     /// Reset scroll to bottom
     pub fn scroll_to_bottom(&mut self) {
-        // For simplicity, we'll auto-scroll by setting a large offset
-        // A more sophisticated implementation would calculate the actual content height
-        self.scroll_offset = 0;
+        let max_scroll = self.content_height.saturating_sub(self.view_height);
+        self.scroll_offset = max_scroll;
+        self.auto_scroll = true;
     }
 }

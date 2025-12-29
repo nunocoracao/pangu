@@ -67,24 +67,23 @@ impl Default for UiSettings {
 /// System prompt settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemSettings {
-    /// System prompt for the assistant
+    /// System prompt for the assistant (used if prompt_file is not set)
+    #[serde(default)]
     pub prompt: String,
+    /// Path to a file containing the system prompt (takes precedence over prompt)
+    #[serde(default)]
+    pub prompt_file: Option<PathBuf>,
+    /// Path to a file containing the welcome message
+    #[serde(default)]
+    pub welcome_file: Option<PathBuf>,
 }
 
 impl Default for SystemSettings {
     fn default() -> Self {
         Self {
-            prompt: String::from(
-                "You are Pangu, a helpful coding assistant running locally. \
-                You assist with software engineering tasks including writing code, \
-                debugging, explaining code, and file operations.\n\n\
-                Guidelines:\n\
-                - Be concise and direct\n\
-                - Provide working code, not pseudocode\n\
-                - Explain your reasoning when helpful\n\
-                - Ask clarifying questions when requirements are ambiguous\n\
-                - Prioritize correctness over cleverness",
-            ),
+            prompt: String::new(),
+            prompt_file: Some(PathBuf::from("./config/system_prompt.txt")),
+            welcome_file: Some(PathBuf::from("./config/welcome.txt")),
         }
     }
 }
