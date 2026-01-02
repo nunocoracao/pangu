@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent};
+use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, KeyEventKind, MouseEvent};
 use futures::{FutureExt, StreamExt};
 use tokio::{
     sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
@@ -20,12 +20,28 @@ pub enum Event {
     Mouse(MouseEvent),
     /// Terminal resize
     Resize(u16, u16),
+    /// Model download progress (downloaded, total, speed in bytes/sec)
+    DownloadProgress(u64, u64, f64),
+    /// Model download completed
+    DownloadComplete,
+    /// Model download error
+    DownloadError(String),
     /// Streaming token from model
     StreamToken(String),
     /// Streaming completed
     StreamDone,
     /// Streaming error
     StreamError(String),
+    /// Tool execution started
+    ToolExecutionStart(String),
+    /// Tool execution completed with result
+    ToolExecutionDone(String, String), // (tool_name, result)
+    /// Tool execution failed
+    ToolExecutionError(String),
+    /// Permission granted - execute the pending tool
+    PermissionGranted(String, String), // (tool_name, tool_params)
+    /// Permission denied - add denial message to chat
+    PermissionDenied(String, String), // (tool_name, tool_params)
     /// Quit the application
     Quit,
 }
@@ -75,6 +91,11 @@ impl EventHandler {
                             Some(Ok(evt)) => {
                                 let event = match evt {
                                     CrosstermEvent::Key(key) => {
+                                        // Only handle key press events, ignore release/repeat
+                                        // (keyboard enhancement flags cause release events)
+                                        if key.kind != KeyEventKind::Press {
+                                            continue;
+                                        }
                                         // Handle Ctrl+C for quit
                                         if key.code == event::KeyCode::Char('c')
                                             && key.modifiers.contains(event::KeyModifiers::CONTROL)

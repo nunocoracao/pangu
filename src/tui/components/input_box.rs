@@ -26,22 +26,22 @@ impl InputBox {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray))
-                .title(" Message (Enter to send, Alt+Enter for newline) "),
+                .title(" Message (Enter to send, Shift+Enter for newline) "),
         );
         Self { textarea }
     }
 
     /// Handle keyboard input
     ///
-    /// Returns Some(text) if the user submitted the message (Enter without Alt)
+    /// Returns Some(text) if the user submitted the message (Enter without Shift)
     pub fn handle_input(&mut self, key: KeyEvent) -> Option<String> {
         match key.code {
-            // Alt+Enter = insert newline (more reliable than Shift+Enter in terminals)
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+            // Shift+Enter = insert newline
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.textarea.insert_newline();
                 None
             }
-            // Enter without Alt = submit
+            // Enter without Shift = submit
             KeyCode::Enter => {
                 let text = self.textarea.lines().join("\n");
                 if text.trim().is_empty() {
@@ -54,7 +54,7 @@ impl InputBox {
                     Block::default()
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(Color::DarkGray))
-                        .title(" Message (Enter to send, Alt+Enter for newline) "),
+                        .title(" Message (Enter to send, Shift+Enter for newline) "),
                 );
                 Some(text)
             }
@@ -80,7 +80,7 @@ impl InputBox {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray))
-                .title(" Message (Enter to send, Alt+Enter for newline) "),
+                .title(" Message (Enter to send, Shift+Enter for newline) "),
         );
     }
 

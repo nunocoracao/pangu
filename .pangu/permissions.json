@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "rules": {
+    "fs": {
+      "list src/": "always",
+      "read Cargo.toml": "always",
+      "list .": "always",
+      "read src/main.rs": "always"
+    }
+  }
+}

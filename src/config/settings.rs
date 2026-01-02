@@ -1,12 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Application settings loaded from config file
+/// Application settings loaded from embedded config file
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub model: ModelSettings,
     pub ui: UiSettings,
-    pub system: SystemSettings,
 }
 
 impl Default for Settings {
@@ -14,7 +13,6 @@ impl Default for Settings {
         Self {
             model: ModelSettings::default(),
             ui: UiSettings::default(),
-            system: SystemSettings::default(),
         }
     }
 }
@@ -22,8 +20,10 @@ impl Default for Settings {
 /// Model-related settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSettings {
-    /// Path to the GGUF model file
-    pub path: PathBuf,
+    /// Hugging Face repository (e.g., "nunocoracao/pangu")
+    pub hf_repo: String,
+    /// Model filename to download
+    pub filename: String,
     /// Number of layers to offload to GPU (-1 = all)
     pub n_gpu_layers: i32,
     /// Context window size
@@ -37,12 +37,32 @@ pub struct ModelSettings {
 impl Default for ModelSettings {
     fn default() -> Self {
         Self {
-            path: PathBuf::from("./models/devstral-small-2-q4.gguf"),
+            hf_repo: "nunocoracao/pangu".to_string(),
+            filename: "devstral-small-2-q4.gguf".to_string(),
             n_gpu_layers: -1,
-            context_size: 8192,
+            context_size: 8192, // Model supports up to 131K, but 8K is memory-friendly
             temperature: 0.15,
             top_p: 0.95,
         }
+    }
+}
+
+impl ModelSettings {
+    /// Get the direct download URL for the model
+    pub fn download_url(&self) -> String {
+        format!(
+            "https://huggingface.co/{}/resolve/main/{}",
+            self.hf_repo, self.filename
+        )
+    }
+
+    /// Get the local model path (in ~/.pangu/models/)
+    pub fn model_path(&self) -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".pangu")
+            .join("models")
+            .join(&self.filename)
     }
 }
 
@@ -60,30 +80,6 @@ impl Default for UiSettings {
         Self {
             frame_rate: 30.0,
             tick_rate: 4.0,
-        }
-    }
-}
-
-/// System prompt settings
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SystemSettings {
-    /// System prompt for the assistant (used if prompt_file is not set)
-    #[serde(default)]
-    pub prompt: String,
-    /// Path to a file containing the system prompt (takes precedence over prompt)
-    #[serde(default)]
-    pub prompt_file: Option<PathBuf>,
-    /// Path to a file containing the welcome message
-    #[serde(default)]
-    pub welcome_file: Option<PathBuf>,
-}
-
-impl Default for SystemSettings {
-    fn default() -> Self {
-        Self {
-            prompt: String::new(),
-            prompt_file: Some(PathBuf::from("./config/system_prompt.txt")),
-            welcome_file: Some(PathBuf::from("./config/welcome.txt")),
         }
     }
 }

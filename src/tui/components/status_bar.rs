@@ -112,10 +112,28 @@ impl Widget for StatusBar<'_> {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
+            AppState::Downloading => (
+                format!("{} Downloading model...", spinner_frame),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
             AppState::Loading => (
                 format!("{} Loading model...", spinner_frame),
                 Style::default()
                     .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            AppState::ExecutingTool(tool_name) => (
+                format!("{} Running {}...", spinner_frame, tool_name),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            AppState::AwaitingPermission => (
+                format!("{} Awaiting permission...", spinner_frame),
+                Style::default()
+                    .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
             AppState::Error(msg) => (

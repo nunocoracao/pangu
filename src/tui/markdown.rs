@@ -14,6 +14,8 @@ use syntect::{
 pub struct MarkdownRenderer {
     syntax_set: SyntaxSet,
     theme_set: ThemeSet,
+    /// Width for rendering (used for code block borders)
+    width: Option<u16>,
 }
 
 impl Default for MarkdownRenderer {
@@ -27,7 +29,13 @@ impl MarkdownRenderer {
         Self {
             syntax_set: SyntaxSet::load_defaults_newlines(),
             theme_set: ThemeSet::load_defaults(),
+            width: None,
         }
+    }
+
+    /// Set the rendering width (for code block borders)
+    pub fn set_width(&mut self, width: u16) {
+        self.width = Some(width);
     }
 
     /// Render markdown text to a vector of ratatui Lines
@@ -315,14 +323,24 @@ impl MarkdownRenderer {
     fn highlight_code(&self, code: &str, lang: Option<&str>) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
 
+        // Calculate border width based on available width or default
+        // Subtract 2 for the chat border, then use remaining space
+        let border_width = self.width.map(|w| w.saturating_sub(4) as usize).unwrap_or(60);
+
+        // Count lines for line number width calculation
+        let line_count = code.lines().count();
+        let line_num_width = if line_count == 0 { 1 } else { line_count.to_string().len() };
+
         // Add top border
         let lang_display = lang.unwrap_or("code");
+        let header_content_len = 3 + lang_display.len() + 1; // "┌─ " + lang + " "
+        let remaining_dashes = border_width.saturating_sub(header_content_len);
         lines.push(Line::from(vec![
             Span::styled("┌─ ", Style::default().fg(Color::DarkGray)),
             Span::styled(lang_display.to_string(), Style::default().fg(Color::Cyan)),
             Span::styled(" ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                "─".repeat(30usize.saturating_sub(lang_display.len())),
+                "─".repeat(remaining_dashes),
                 Style::default().fg(Color::DarkGray),
             ),
         ]));
@@ -335,9 +353,16 @@ impl MarkdownRenderer {
         let theme = &self.theme_set.themes["base16-ocean.dark"];
 
         let mut highlighter = HighlightLines::new(syntax, theme);
+        let mut line_num = 1;
 
         for line in LinesWithEndings::from(code) {
-            let mut spans = vec![Span::styled("│ ", Style::default().fg(Color::DarkGray))];
+            // Format line number with padding
+            let line_num_str = format!("{:>width$}", line_num, width = line_num_width);
+            let mut spans = vec![
+                Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(line_num_str, Style::default().fg(Color::DarkGray)),
+                Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            ];
 
             match highlighter.highlight_line(line, &self.syntax_set) {
                 Ok(highlighted) => {
@@ -358,11 +383,12 @@ impl MarkdownRenderer {
             }
 
             lines.push(Line::from(spans));
+            line_num += 1;
         }
 
         // Add bottom border
         lines.push(Line::from(Span::styled(
-            "└".to_string() + &"─".repeat(33),
+            "└".to_string() + &"─".repeat(border_width.saturating_sub(1)),
             Style::default().fg(Color::DarkGray),
         )));
 

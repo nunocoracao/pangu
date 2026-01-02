@@ -9,6 +9,7 @@
 
 # Model files (large GGUF files)
 /models/*.gguf
+/models/*.zst
 /models/*.bin
 !/models/.gitkeep
 

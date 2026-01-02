@@ -1,15 +1,33 @@
 #!/bin/bash
-# Download Devstral Small 2 Q4 GGUF model
-# Using bartowski's community conversion (no auth required, latest model)
+# Download Pangu model from Hugging Face
+# Models available: devstral-small-2-q4.gguf (~12GB) and devstral-small-2-q6.gguf (~19GB)
 
 set -e
 
 MODEL_DIR="$(dirname "$0")"
-MODEL_FILE="$MODEL_DIR/devstral-small-2-q4.gguf"
 
-# bartowski's GGUF conversion of the latest Devstral-Small-2-24B-Instruct-2512
-REPO_ID="bartowski/mistralai_Devstral-Small-2-24B-Instruct-2512-GGUF"
-FILENAME="mistralai_Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf"
+# Default to Q4 (smaller), use Q6 for higher quality
+MODEL_VARIANT="${1:-q4}"
+
+case "$MODEL_VARIANT" in
+    q4|Q4)
+        FILENAME="devstral-small-2-q4.gguf"
+        SIZE_HINT="~12GB"
+        ;;
+    q6|Q6)
+        FILENAME="devstral-small-2-q6.gguf"
+        SIZE_HINT="~19GB"
+        ;;
+    *)
+        echo "Usage: $0 [q4|q6]"
+        echo "  q4 - Smaller model (~12GB), faster"
+        echo "  q6 - Higher quality (~19GB), more accurate"
+        exit 1
+        ;;
+esac
+
+MODEL_FILE="$MODEL_DIR/$FILENAME"
+REPO_ID="nunocoracao/pangu"
 
 if [ -f "$MODEL_FILE" ]; then
     echo "Model already downloaded at $MODEL_FILE"
@@ -32,28 +50,27 @@ else
     exit 1
 fi
 
-echo "Downloading Devstral Small 2 Q4 (~14GB)..."
-echo "Source: $REPO_ID"
+echo "Downloading Pangu model ($MODEL_VARIANT, $SIZE_HINT)..."
+echo "Source: https://huggingface.co/$REPO_ID"
 echo "This may take a while depending on your connection speed."
 echo ""
 
 # Download using hf cli
 $HF_CLI download "$REPO_ID" "$FILENAME" --local-dir "$MODEL_DIR"
 
-# Rename to expected filename
-if [ -f "$MODEL_DIR/$FILENAME" ]; then
-    mv "$MODEL_DIR/$FILENAME" "$MODEL_FILE"
-    # Clean up .huggingface directory if created
-    rm -rf "$MODEL_DIR/.huggingface" 2>/dev/null || true
+# Clean up .huggingface directory if created
+rm -rf "$MODEL_DIR/.huggingface" 2>/dev/null || true
+
+if [ -f "$MODEL_FILE" ]; then
     echo ""
     echo "Download complete: $MODEL_FILE"
     echo "Size: $(du -h "$MODEL_FILE" | cut -f1)"
     echo ""
-    echo "You can now run: cargo run --release --features metal"
+    echo "You can now run: cargo run --release"
 else
-    echo "Error: Download failed. File not found: $MODEL_DIR/$FILENAME"
+    echo "Error: Download failed. File not found: $MODEL_FILE"
     echo ""
-    echo "Try manual download:"
-    echo "  $HF_CLI download $REPO_ID --include '*Q4_K_M*' --local-dir $MODEL_DIR"
+    echo "Try manual download from:"
+    echo "  https://huggingface.co/$REPO_ID/resolve/main/$FILENAME"
     exit 1
 fi

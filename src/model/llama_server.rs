@@ -64,6 +64,8 @@ impl LlamaServerBackend {
             Role::System => "system".to_string(),
             Role::User => "user".to_string(),
             Role::Assistant => "assistant".to_string(),
+            // Tool results are sent as user messages in the chat API
+            Role::Tool => "user".to_string(),
         }
     }
 
@@ -105,6 +107,80 @@ impl LlamaServerBackend {
             Ok(resp) => resp.status().is_success(),
             Err(_) => false,
         }
+    }
+
+    /// Load with a specific llama-server binary path
+    pub fn load_with_server(
+        model_path: &Path,
+        server_path: &Path,
+        params: ModelParams,
+    ) -> Result<Self, ModelError> {
+        let model_path_str = model_path.to_string_lossy().to_string();
+        let model_name = model_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let client = Client::new();
+        let base_url = format!("http://{}:{}", SERVER_HOST, SERVER_PORT);
+
+        // Check if server is already running
+        let rt = tokio::runtime::Handle::current();
+        let server_already_running = rt.block_on(Self::check_server_running(&client, &base_url));
+
+        let server_process = if server_already_running {
+            tracing::info!("Found existing llama-server, connecting to it");
+            None
+        } else {
+            if !server_path.exists() {
+                return Err(ModelError::LoadError(format!(
+                    "llama-server not found at {:?}",
+                    server_path
+                )));
+            }
+
+            // Build command arguments
+            let mut cmd = Command::new(server_path);
+            cmd.arg("--model").arg(&model_path_str)
+               .arg("--host").arg(SERVER_HOST)
+               .arg("--port").arg(SERVER_PORT.to_string())
+               .arg("--ctx-size").arg(params.context_size.to_string());
+
+            // GPU layers
+            if params.n_gpu_layers != 0 {
+                let layers = if params.n_gpu_layers < 0 { 999 } else { params.n_gpu_layers };
+                cmd.arg("--n-gpu-layers").arg(layers.to_string());
+            }
+
+            // Suppress server output
+            cmd.stdout(Stdio::null())
+               .stderr(Stdio::null());
+
+            tracing::info!("Starting llama-server with model: {}", model_path_str);
+
+            let process = cmd
+                .spawn()
+                .map_err(|e| ModelError::LoadError(format!("Failed to spawn llama-server: {}", e)))?;
+
+            // Register PID for signal handler cleanup
+            crate::set_llama_server_pid(process.id());
+
+            // Wait for server to be ready
+            rt.block_on(Self::wait_for_server(&client, &base_url))?;
+
+            tracing::info!("llama-server started successfully");
+            Some(process)
+        };
+
+        Ok(Self {
+            server_process,
+            client,
+            base_url,
+            info: ModelInfo {
+                name: model_name,
+                context_size: params.context_size as usize,
+            },
+        })
     }
 }
 
@@ -177,6 +253,9 @@ impl ModelBackend for LlamaServerBackend {
             let process = cmd
                 .spawn()
                 .map_err(|e| ModelError::LoadError(format!("Failed to spawn llama-server: {}", e)))?;
+
+            // Register PID for signal handler cleanup
+            crate::set_llama_server_pid(process.id());
 
             // Wait for server to be ready
             rt.block_on(Self::wait_for_server(&client, &base_url))?;
@@ -294,6 +373,7 @@ impl ModelBackend for LlamaServerBackend {
                 Role::System => prompt.push_str(&format!("[SYSTEM] {}\n", msg.content)),
                 Role::User => prompt.push_str(&format!("[USER] {}\n", msg.content)),
                 Role::Assistant => prompt.push_str(&format!("[ASSISTANT] {}\n", msg.content)),
+                Role::Tool => prompt.push_str(&format!("[TOOL] {}\n", msg.content)),
             }
         }
         prompt
@@ -303,11 +383,23 @@ impl ModelBackend for LlamaServerBackend {
 impl Drop for LlamaServerBackend {
     fn drop(&mut self) {
         // Only kill the server if we spawned it (not if we connected to existing)
-        if let Some(ref mut process) = self.server_process {
-            tracing::info!("Shutting down llama-server");
-            let _ = process.kill();
-        } else {
-            tracing::info!("Disconnecting from shared llama-server (not killing)");
+        if let Some(mut process) = self.server_process.take() {
+            let pid = process.id();
+            eprintln!("[pangu] Shutting down llama-server (pid: {})", pid);
+
+            // Clear the global PID so signal handler doesn't try to kill it again
+            crate::set_llama_server_pid(0);
+
+            // Kill the process
+            if let Err(e) = process.kill() {
+                eprintln!("[pangu] Failed to kill llama-server: {}", e);
+            }
+
+            // Wait for the process to avoid zombies
+            match process.wait() {
+                Ok(status) => eprintln!("[pangu] llama-server exited: {}", status),
+                Err(e) => eprintln!("[pangu] Failed to wait for llama-server: {}", e),
+            }
         }
     }
 }

@@ -3,11 +3,29 @@ use ratatui::{
     Frame,
 };
 
-use super::components::{ChatView, SidePane, StatusBar};
+use super::components::{ChatView, LoadingScreen, LoadingState, PermissionPrompt, SidePane, StatusBar};
 use crate::app::App;
 
 /// Render the application UI
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    // Show full-screen loading animation while downloading or loading model
+    if app.state.is_downloading() {
+        let (downloaded, total, speed) = app.download_progress
+            .as_ref()
+            .map(|p| (p.downloaded, p.total, p.speed))
+            .unwrap_or((0, 0, 0.0));
+        let state = LoadingState::Downloading { downloaded, total, speed };
+        let loading = LoadingScreen::new(app.tick, &mut app.matrix_columns, state);
+        frame.render_widget(loading, frame.area());
+        return;
+    }
+
+    if app.state.is_loading() {
+        let loading = LoadingScreen::new(app.tick, &mut app.matrix_columns, LoadingState::Loading);
+        frame.render_widget(loading, frame.area());
+        return;
+    }
+
     // Main vertical layout: content area and footer
     let main_vertical = Layout::default()
         .direction(Direction::Vertical)
@@ -38,8 +56,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Calculate view height (chat area minus borders)
     let view_height = left_chunks[0].height.saturating_sub(2);
 
-    // Create chat view and get content height
-    let chat = ChatView::new(
+    // Create chat view and get content height (accounting for text wrapping)
+    let mut chat = ChatView::new(
         &app.messages,
         &app.current_response,
         app.scroll_offset,
@@ -48,7 +66,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         app.tick,
         &app.welcome_message,
     );
-    let content_height = chat.content_height();
+    let content_height = chat.content_height(left_chunks[0].width);
 
     // Update app dimensions for auto-scroll
     app.update_dimensions(content_height, view_height);
@@ -68,11 +86,28 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Render input box
     app.input_box.render(left_chunks[1], frame);
 
-    // Render side pane (tools, files)
-    let side_pane = SidePane::new();
+    // Render side pane (context, tools, todos)
+    let side_pane = SidePane::new(
+        &app.context_info,
+        &app.tool_names,
+        app.active_tool.as_deref(),
+        &app.todo_list,
+    );
     frame.render_widget(side_pane, content_horizontal[1]);
 
     // Render status bar (spans full width, includes directory/git info)
     let status = StatusBar::new(&app.state, app.tick);
     frame.render_widget(status, main_vertical[1]);
+
+    // Render permission prompt overlay if needed
+    if let Some(ref pending) = app.pending_permission {
+        if app.state.is_awaiting_permission() {
+            let prompt = PermissionPrompt::new(
+                &pending.tool_name,
+                &pending.tool_params,
+                &pending.permission_key,
+            ).with_selected(app.permission_selection);
+            frame.render_widget(prompt, frame.area());
+        }
+    }
 }

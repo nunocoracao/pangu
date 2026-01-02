@@ -6,6 +6,8 @@ pub enum Role {
     System,
     User,
     Assistant,
+    /// Tool execution result
+    Tool,
 }
 
 /// A message in the conversation
@@ -37,6 +39,14 @@ impl ChatMessage {
         Self {
             role: Role::Assistant,
             content: content.into(),
+        }
+    }
+
+    /// Create a new tool result message
+    pub fn tool_result(tool_name: &str, result: impl Into<String>) -> Self {
+        Self {
+            role: Role::Tool,
+            content: format!("[Tool: {}]\n{}", tool_name, result.into()),
         }
     }
 }

@@ -1,14 +1,17 @@
-# Pangu Default Configuration
+# Pangu Configuration
+# This file is compiled into the binary - changes require recompilation
 
 [model]
-# Path to the GGUF model file
-path = "./models/devstral-small-2-q4.gguf"
+# Hugging Face repository containing the model
+hf_repo = "nunocoracao/pangu"
+# Model filename (downloaded to ~/.pangu/models/)
+filename = "devstral-small-2-q4.gguf"
 # Number of layers to offload to GPU (0 = CPU only, -1 = all)
 n_gpu_layers = -1
-# Context window size
+# Context window size (model supports up to 131K, but 8K is memory-friendly)
 context_size = 8192
 # Temperature for sampling (0.0 = deterministic, higher = more random)
-temperature = 0.15
+temperature = 0.2
 # Top-p sampling
 top_p = 0.95
 
@@ -17,11 +20,3 @@ top_p = 0.95
 frame_rate = 30.0
 # Ticks per second for updates
 tick_rate = 4.0
-
-[system]
-# Path to a file containing the system prompt (takes precedence over inline prompt)
-prompt_file = "./config/system_prompt.txt"
-# Path to a file containing the welcome message (ASCII art)
-welcome_file = "./config/welcome.txt"
-# Alternatively, you can specify the prompt inline:
-# prompt = "Your system prompt here..."
