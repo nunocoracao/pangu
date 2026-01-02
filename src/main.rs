@@ -568,7 +568,8 @@ async fn main() -> Result<()> {
                             .map(|m| m.content.clone())
                             .unwrap_or_default();
 
-                        // Build context with RAG (max 10 RAG messages + last 30 recent)
+                        // Build context with RAG (max 5 RAG messages + last 15 recent)
+                        // Keep it conservative to stay within context window
                         let history = rag_history.read().unwrap().clone();
                         let system_prompt = resources.system_prompt();
                         let (context_messages, rag_count) = retriever.build_context(
@@ -576,8 +577,8 @@ async fn main() -> Result<()> {
                             &history,
                             &app.messages,
                             Some(system_prompt),
-                            10,  // max RAG messages
-                            30,  // max recent messages
+                            5,   // max RAG messages
+                            15,  // max recent messages
                         );
 
                         // Update context usage display

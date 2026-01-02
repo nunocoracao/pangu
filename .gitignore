@@ -33,3 +33,5 @@ Thumbs.db
 *.profraw
 
 .cache/bin/
+
+./pangu/history/*

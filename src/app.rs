@@ -178,15 +178,21 @@ impl App {
     /// Update context usage (approximate token count)
     /// Uses a simple heuristic: ~4 chars per token
     pub fn update_context_usage(&mut self, rag_messages: usize) {
+        // Count only non-system messages for the display
+        // (system prompt is counted separately in actual context sent)
         let mut total_chars = 0;
+        let mut msg_count = 0;
         for msg in &self.messages {
-            total_chars += msg.content.len();
+            if msg.role != crate::model::Role::System {
+                total_chars += msg.content.len();
+                msg_count += 1;
+            }
         }
         total_chars += self.current_response.len();
 
         // Approximate tokens (roughly 4 chars per token for English)
         self.context_info.tokens_used = total_chars / 4;
-        self.context_info.message_count = self.messages.len();
+        self.context_info.message_count = msg_count;
         self.context_info.rag_messages = rag_messages;
     }
 
