@@ -2,8 +2,8 @@ use crossterm::event::{KeyCode, KeyModifiers, MouseEventKind};
 
 use crate::action::Action;
 use crate::app::{App, AppState};
-use crate::permissions::PermissionResponse;
 use crate::tui::Event;
+use crate::tui::components::chat_view::extract_selected_text;
 
 /// Handle events and return an action
 pub fn handle_event(app: &mut App, event: Event) -> Action {
@@ -11,41 +11,41 @@ pub fn handle_event(app: &mut App, event: Event) -> Action {
         Event::Quit => Action::Quit,
 
         Event::Key(key) => {
-            // Block all input while generating (model is busy)
-            if matches!(app.state, AppState::Generating) {
-                return Action::None;
-            }
-
-            // Handle permission prompt input
-            if matches!(app.state, AppState::AwaitingPermission) {
-                return match key.code {
-                    // Arrow keys for navigation
-                    KeyCode::Up | KeyCode::Char('k') => Action::PermissionSelectPrev,
-                    KeyCode::Down | KeyCode::Char('j') => Action::PermissionSelectNext,
-                    // Enter to confirm selection
-                    KeyCode::Enter => Action::PermissionConfirm,
-                    // Direct keyboard shortcuts
-                    KeyCode::Char('y') => Action::PermissionRespond(PermissionResponse::AllowOnce),
-                    KeyCode::Char('a') => Action::PermissionRespond(PermissionResponse::AllowAlways),
-                    KeyCode::Char('n') => Action::PermissionRespond(PermissionResponse::DenyOnce),
-                    KeyCode::Char('!') => Action::PermissionRespond(PermissionResponse::DenyAlways),
-                    // Escape to deny once
-                    KeyCode::Esc => Action::PermissionRespond(PermissionResponse::DenyOnce),
-                    _ => Action::None,
-                };
+            // Handle Ctrl+C: copy if selection, else quit
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                if app.has_selection() {
+                    return Action::CopySelection;
+                } else {
+                    return Action::Quit;
+                }
             }
 
             match key.code {
-                // Scroll with Ctrl+U/D
+                // Scroll with Ctrl+U/D (always allowed, even during generation)
                 KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     Action::ScrollUp(10)
                 }
                 KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     Action::ScrollDown(10)
                 }
-                // Page up/down
+                // Page up/down (always allowed)
                 KeyCode::PageUp => Action::ScrollUp(20),
                 KeyCode::PageDown => Action::ScrollDown(20),
+                // Arrow key scrolling when generating (since input is blocked)
+                KeyCode::Up if matches!(app.state, AppState::Generating) => Action::ScrollUp(1),
+                KeyCode::Down if matches!(app.state, AppState::Generating) => Action::ScrollDown(1),
+                // Escape: cancel generation or clear selection
+                KeyCode::Esc => {
+                    if matches!(app.state, AppState::Generating) {
+                        Action::CancelGeneration
+                    } else if app.has_selection() {
+                        Action::ClearSelection
+                    } else {
+                        Action::None
+                    }
+                }
+                // Block other input while generating (model is busy)
+                _ if matches!(app.state, AppState::Generating) => Action::None,
                 // Forward to input box
                 _ => {
                     if let Some(text) = app.input_box.handle_input(key) {
@@ -64,74 +64,99 @@ pub fn handle_event(app: &mut App, event: Event) -> Action {
             }
         }
 
+        // Handle pasted text (from bracketed paste mode)
+        Event::Paste(text) => {
+            // Don't allow paste while generating
+            if matches!(app.state, AppState::Generating) {
+                return Action::None;
+            }
+            // Insert pasted text into input box (preserves newlines)
+            app.input_box.insert_text(&text);
+            Action::None
+        }
+
         Event::StreamToken(token) => Action::AppendToken(token),
         Event::StreamDone => Action::FinishStreaming,
         Event::StreamError(error) => Action::SetError(error),
+        Event::InputTokens(count) => Action::AddInputTokens(count),
 
-        Event::Mouse(mouse) => match mouse.kind {
-            MouseEventKind::ScrollUp => Action::ScrollUp(3),
-            MouseEventKind::ScrollDown => Action::ScrollDown(3),
-            _ => Action::None,
-        },
+        // Handle mouse scroll events (always allowed)
+        Event::Mouse(mouse) => {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => Action::ScrollUp(3),
+                MouseEventKind::ScrollDown => Action::ScrollDown(3),
+                _ => Action::None,
+            }
+        }
+
+        // Handle mouse selection events
+        Event::MouseDown(col, row) => Action::SelectionStart(col, row),
+        Event::MouseDrag(col, row) => Action::SelectionUpdate(col, row),
+        Event::MouseUp(_col, _row) => Action::SelectionEnd,
 
         _ => Action::None,
     }
 }
 
 /// Apply an action to the application state
-/// Returns the permission response if a permission action was handled
-pub fn apply_action(app: &mut App, action: Action) -> Option<PermissionResponse> {
+pub fn apply_action(app: &mut App, action: Action) {
     match action {
         Action::Quit => {
             app.should_quit = true;
-            None
         }
         Action::SubmitMessage(text) => {
             app.add_user_message(text);
             app.start_generating();
-            None
         }
         Action::AppendToken(token) => {
             app.append_token(token);
-            None
         }
         Action::FinishStreaming => {
             app.finish_generating();
-            None
+        }
+        Action::CancelGeneration => {
+            app.cancel_generation();
         }
         Action::SetError(error) => {
             app.set_error(error);
-            None
         }
         Action::ScrollUp(amount) => {
             app.scroll_up(amount);
-            None
         }
         Action::ScrollDown(amount) => {
             app.scroll_down(amount);
-            None
         }
         Action::ModelLoaded => {
             app.set_idle();
-            None
         }
-        Action::PermissionSelectPrev => {
-            app.permission_select_prev();
-            None
+        Action::SelectionStart(col, row) => {
+            app.start_selection(col, row);
         }
-        Action::PermissionSelectNext => {
-            app.permission_select_next();
-            None
+        Action::SelectionUpdate(col, row) => {
+            app.update_selection(col, row);
         }
-        Action::PermissionConfirm => {
-            // Get the response from the current selection
-            let response = app.get_permission_response();
-            Some(response)
+        Action::SelectionEnd => {
+            app.finish_selection();
         }
-        Action::PermissionRespond(response) => {
-            // Direct response from keyboard shortcut
-            Some(response)
+        Action::CopySelection => {
+            // Extract selected text and copy to clipboard
+            if let Some(ref selection) = app.selection {
+                let text = extract_selected_text(&app.chat_cache.lines, selection, app.scroll_offset);
+                if !text.is_empty() {
+                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                        let _ = clipboard.set_text(&text);
+                        tracing::info!("Copied {} chars to clipboard", text.len());
+                    }
+                }
+            }
+            app.clear_selection();
         }
-        Action::None => None,
+        Action::ClearSelection => {
+            app.clear_selection();
+        }
+        Action::AddInputTokens(count) => {
+            app.add_input_tokens(count);
+        }
+        Action::None => {}
     }
 }

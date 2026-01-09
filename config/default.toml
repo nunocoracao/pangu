@@ -8,7 +8,7 @@ hf_repo = "nunocoracao/pangu"
 filename = "devstral-small-2-q4.gguf"
 # Number of layers to offload to GPU (0 = CPU only, -1 = all)
 n_gpu_layers = -1
-# Context window size (model supports up to 131K, but 8K is memory-friendly)
+# Context window size (smaller = faster, model supports up to 131K)
 context_size = 8192
 # Temperature for sampling (0.0 = deterministic, higher = more random)
 temperature = 0.2
@@ -20,3 +20,11 @@ top_p = 0.95
 frame_rate = 30.0
 # Ticks per second for updates
 tick_rate = 4.0
+
+[rag]
+# Maximum RAG messages to retrieve from history (fewer = faster)
+max_rag_messages = 5
+# Maximum recent messages to include in context
+max_recent_messages = 20
+# Maximum sessions to keep in history (cleanup threshold)
+max_sessions = 1000

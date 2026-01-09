@@ -6,6 +6,8 @@ use std::path::PathBuf;
 pub struct Settings {
     pub model: ModelSettings,
     pub ui: UiSettings,
+    #[serde(default)]
+    pub rag: RagSettings,
 }
 
 impl Default for Settings {
@@ -13,6 +15,7 @@ impl Default for Settings {
         Self {
             model: ModelSettings::default(),
             ui: UiSettings::default(),
+            rag: RagSettings::default(),
         }
     }
 }
@@ -80,6 +83,27 @@ impl Default for UiSettings {
         Self {
             frame_rate: 30.0,
             tick_rate: 4.0,
+        }
+    }
+}
+
+/// RAG (Retrieval Augmented Generation) settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RagSettings {
+    /// Maximum RAG messages to retrieve from history
+    pub max_rag_messages: usize,
+    /// Maximum recent messages to include in context
+    pub max_recent_messages: usize,
+    /// Maximum sessions to keep in history (cleanup threshold)
+    pub max_sessions: usize,
+}
+
+impl Default for RagSettings {
+    fn default() -> Self {
+        Self {
+            max_rag_messages: 5,
+            max_recent_messages: 15,
+            max_sessions: 100,
         }
     }
 }

@@ -3,7 +3,7 @@ use std::io::{self, stderr, Stderr};
 use color_eyre::Result;
 use crossterm::{
     event::{
-        DisableMouseCapture, EnableMouseCapture,
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
         KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
@@ -19,12 +19,15 @@ pub fn init() -> Result<Tui> {
     // Enable raw mode for direct input handling
     enable_raw_mode()?;
 
-    // Enter alternate screen buffer, enable mouse capture, and enable keyboard enhancements
+    // Enter alternate screen buffer and enable keyboard/mouse enhancements
     // The keyboard enhancement enables proper detection of Shift+Enter
+    // Mouse capture enabled for scroll wheel support
+    // Bracketed paste enables proper handling of pasted multiline text
     execute!(
         stderr(),
         EnterAlternateScreen,
         EnableMouseCapture,
+        EnableBracketedPaste,
         PushKeyboardEnhancementFlags(
             KeyboardEnhancementFlags::REPORT_EVENT_TYPES
                 | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
@@ -48,12 +51,13 @@ pub fn init() -> Result<Tui> {
 /// Restore the terminal to its original state
 pub fn restore() -> io::Result<()> {
     disable_raw_mode()?;
-    // Pop keyboard enhancements, leave alternate screen, and disable mouse capture
+    // Pop keyboard enhancements, disable mouse/paste, and leave alternate screen
     execute!(
         stderr(),
         PopKeyboardEnhancementFlags,
-        LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableBracketedPaste,
+        DisableMouseCapture,
+        LeaveAlternateScreen
     )?;
     Ok(())
 }

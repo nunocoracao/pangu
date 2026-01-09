@@ -32,6 +32,35 @@ const LOGO: &[&str] = &[
 /// Progress bar width in characters
 const PROGRESS_BAR_WIDTH: usize = 40;
 
+/// Fun sentences to display during model loading (rotates every few seconds)
+const LOADING_MESSAGES: &[&str] = &[
+    "Waking up the neurons...",
+    "Stretching the tensors...",
+    "Warming up the GPU...",
+    "Assembling the transformer...",
+    "Connecting synapses...",
+    "Booting consciousness...",
+    "Loading imagination module...",
+    "Initializing creativity...",
+    "Spinning up attention heads...",
+    "Preparing to think...",
+    "Calibrating intelligence...",
+    "Unfreezing the weights...",
+    "Hydrating the model...",
+    "Plugging in the brain...",
+    "Starting the think tank...",
+    "Revving neural engines...",
+    "Activating language cores...",
+    "Loading common sense...",
+    "Brewing fresh tokens...",
+    "Tuning the frequencies...",
+    "Aligning the matrices...",
+    "Charging creative batteries...",
+    "Summoning the AI...",
+    "Preparing witty responses...",
+    "Loading sarcasm module...",
+];
+
 /// Fun sentences to display during download (rotates every few seconds)
 const DOWNLOAD_MESSAGES: &[&str] = &[
     "Teaching silicon to think...",
@@ -79,6 +108,16 @@ pub enum LoadingState {
     Loading,
 }
 
+/// Simple hash function for better randomness
+fn hash_mix(mut x: u64) -> u64 {
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xff51afd7ed558ccd);
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
+    x ^= x >> 33;
+    x
+}
+
 /// State for a single matrix rain column
 #[derive(Clone)]
 pub struct MatrixColumn {
@@ -90,20 +129,35 @@ pub struct MatrixColumn {
     pub chars: Vec<char>,
     /// Trail length
     pub trail_len: usize,
+    /// Internal seed for this column (for randomness)
+    seed: u64,
+    /// Mutation rate (some columns mutate faster)
+    mutation_rate: u64,
 }
 
 impl MatrixColumn {
     /// Create a new column with random initial state
     pub fn new(height: u16, seed: u64) -> Self {
-        let speed = 0.3 + (seed % 100) as f32 / 200.0; // 0.3 to 0.8
-        let start_y = -((seed % (height as u64 * 2)) as f32); // Start above screen
-        let trail_len = 4 + (seed % 8) as usize; // 4 to 11
+        let h = hash_mix(seed);
+        let h2 = hash_mix(h);
+        let h3 = hash_mix(h2);
+
+        // More varied speeds: 0.2 to 1.0
+        let speed = 0.2 + (h % 1000) as f32 / 1250.0;
+        // Start at random positions, some way above screen
+        let start_y = -((h2 % (height as u64 * 3 + 10)) as f32);
+        // Trail length: 3 to 14
+        let trail_len = 3 + (h3 % 12) as usize;
+        // Mutation rate: some columns change chars more frequently
+        let mutation_rate = 2 + (hash_mix(h3) % 5);
 
         Self {
             y: start_y,
             speed,
             chars: Vec::with_capacity(trail_len),
             trail_len,
+            seed: h,
+            mutation_rate,
         }
     }
 
@@ -113,23 +167,41 @@ impl MatrixColumn {
 
         // Reset if we've gone past the screen
         if self.y > height as f32 + self.trail_len as f32 {
-            self.y = -(self.trail_len as f32) - ((tick + col_idx as u64) % 20) as f32;
+            // Mix in tick for varied reset timing
+            let reset_hash = hash_mix(tick.wrapping_add(self.seed).wrapping_mul(col_idx as u64 + 1));
+            // Random delay before reappearing (5 to 35 cells above)
+            self.y = -(self.trail_len as f32) - (5.0 + (reset_hash % 30) as f32);
+            // Slightly vary speed on reset
+            let speed_hash = hash_mix(reset_hash);
+            self.speed = 0.2 + (speed_hash % 1000) as f32 / 1250.0;
+            // Possibly change trail length
+            if reset_hash % 4 == 0 {
+                self.trail_len = 3 + (hash_mix(speed_hash) % 12) as usize;
+            }
             self.chars.clear();
+            self.seed = reset_hash;
         }
 
-        // Generate characters for the trail
-        let char_seed = tick.wrapping_mul(col_idx as u64 + 1);
+        // Generate characters for the trail using varied seeds
         while self.chars.len() < self.trail_len {
-            let idx = (char_seed.wrapping_add(self.chars.len() as u64)) as usize % MATRIX_CHARS.len();
+            let char_hash = hash_mix(self.seed.wrapping_add(self.chars.len() as u64 * 7919));
+            let idx = (char_hash as usize) % MATRIX_CHARS.len();
             self.chars.push(MATRIX_CHARS[idx]);
         }
 
         // Randomly change some characters for the "mutation" effect
-        if tick % 3 == 0 {
-            let idx = (tick as usize + col_idx) % self.chars.len().max(1);
-            if idx < self.chars.len() {
-                let char_idx = (tick.wrapping_mul(col_idx as u64 + 7)) as usize % MATRIX_CHARS.len();
-                self.chars[idx] = MATRIX_CHARS[char_idx];
+        // Different columns mutate at different rates
+        if tick % self.mutation_rate == 0 && !self.chars.is_empty() {
+            let mutation_hash = hash_mix(tick.wrapping_mul(self.seed));
+            let idx = (mutation_hash as usize) % self.chars.len();
+            let char_idx = (hash_mix(mutation_hash) as usize) % MATRIX_CHARS.len();
+            self.chars[idx] = MATRIX_CHARS[char_idx];
+
+            // Sometimes mutate a second character
+            if mutation_hash % 3 == 0 && self.chars.len() > 1 {
+                let idx2 = (hash_mix(mutation_hash + 1) as usize) % self.chars.len();
+                let char_idx2 = (hash_mix(mutation_hash + 2) as usize) % MATRIX_CHARS.len();
+                self.chars[idx2] = MATRIX_CHARS[char_idx2];
             }
         }
     }
@@ -224,7 +296,7 @@ impl<'a> LoadingScreen<'a> {
         // Calculate extra height needed based on state
         let extra_height: u16 = match &self.state {
             LoadingState::Downloading { .. } => 10, // Title + fun message + progress + size + speed
-            LoadingState::Loading => 4,
+            LoadingState::Loading => 6, // Spinner + fun message
         };
 
         // Calculate box dimensions first - use the wider of logo or progress bar
@@ -286,26 +358,61 @@ impl<'a> LoadingScreen<'a> {
         }
     }
 
-    /// Render the loading spinner
+    /// Render the loading spinner with fun rotating messages
     fn render_loading_spinner(&self, buf: &mut Buffer, area: Rect, box_x: u16, box_width: u16, y: u16) {
-        if y >= area.y && y < area.y + area.height {
-            // Use ASCII spinner characters for reliability
-            let ascii_spinner = ["|", "/", "-", "\\"];
-            let spinner_frame = ascii_spinner[(self.tick as usize) % ascii_spinner.len()];
-            let loading_text = format!("{} Loading model...", spinner_frame);
-            let text_len = loading_text.len() as u16;
-            let text_start_x = box_x + (box_width.saturating_sub(text_len)) / 2;
-            let bg = Style::default().fg(Color::Yellow).bg(Color::Rgb(10, 10, 20));
+        let bg = Style::default().bg(Color::Rgb(10, 10, 20));
 
-            for (i, ch) in loading_text.bytes().enumerate() {
-                let x = text_start_x + i as u16;
+        // Helper to render a line of text centered in the box
+        let render_line = |buf: &mut Buffer, line_y: u16, text: &str, style: Style| {
+            if line_y < area.y || line_y >= area.y + area.height {
+                return;
+            }
+            let text_len = text.len() as u16;
+            let start_x = box_x + (box_width.saturating_sub(text_len)) / 2;
+
+            for (i, ch) in text.bytes().enumerate() {
+                let x = start_x + i as u16;
                 if x >= area.x && x < area.x + area.width {
-                    if let Some(cell) = buf.cell_mut((x, y)) {
-                        cell.set_char(ch as char).set_style(bg);
+                    if let Some(cell) = buf.cell_mut((x, line_y)) {
+                        cell.set_char(ch as char).set_style(style);
                     }
                 }
             }
-        }
+        };
+
+        // Line 1: Spinner with "Loading model..."
+        let ascii_spinner = ["|", "/", "-", "\\"];
+        let spinner_frame = ascii_spinner[(self.tick as usize) % ascii_spinner.len()];
+        let loading_text = format!("{} Loading model...", spinner_frame);
+        render_line(buf, y, &loading_text, bg.fg(Color::Yellow));
+
+        // Line 2: Fun rotating message with typewriter effect
+        // Message changes every ~4 seconds, types out over ~1.5 seconds
+        let message_cycle = 16u64; // ticks per message (4 sec at 4Hz)
+        let message_idx = (self.tick / message_cycle) as usize % LOADING_MESSAGES.len();
+        let fun_message = LOADING_MESSAGES[message_idx];
+
+        // Calculate how many characters to show (typewriter effect)
+        let ticks_into_message = self.tick % message_cycle;
+        let type_speed = 3u64; // characters per tick
+        let chars_to_show = ((ticks_into_message * type_speed) as usize).min(fun_message.len());
+
+        // Render the partial message with a cursor
+        let visible_message: String = if chars_to_show < fun_message.len() {
+            format!("{}|", &fun_message[..chars_to_show])
+        } else {
+            fun_message.to_string()
+        };
+
+        // Fade color based on how complete the message is
+        let brightness = if chars_to_show >= fun_message.len() {
+            200u8 // Full brightness when complete
+        } else {
+            150u8 // Slightly dimmer while typing
+        };
+        let msg_color = Color::Rgb(100, brightness, brightness); // Cyan-ish (different from download)
+
+        render_line(buf, y + 1, &visible_message, bg.fg(msg_color));
     }
 
     /// Render the download progress bar and stats

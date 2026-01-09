@@ -1,3 +1,3 @@
 mod settings;
 
-pub use settings::{ModelSettings, Settings, UiSettings};
+pub use settings::Settings;

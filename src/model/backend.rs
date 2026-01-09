@@ -6,6 +6,7 @@ use super::{ChatMessage, StreamEvent};
 
 /// Errors that can occur during model operations
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum ModelError {
     #[error("Failed to load model: {0}")]
     LoadError(String),
@@ -40,6 +41,7 @@ impl Default for ModelParams {
 
 /// Configuration for inference
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct InferenceConfig {
     /// Maximum tokens to generate
     pub max_tokens: usize,
@@ -64,6 +66,7 @@ impl Default for InferenceConfig {
 
 /// Information about a loaded model
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ModelInfo {
     /// Model name (usually the filename)
     pub name: String,
@@ -75,6 +78,7 @@ pub struct ModelInfo {
 ///
 /// This abstraction allows swapping between different inference backends
 /// (llama.cpp, llamafile, API-based, etc.)
+#[allow(dead_code)]
 pub trait ModelBackend: Send + Sync {
     /// Load a model from the given path
     fn load(path: &Path, params: ModelParams) -> Result<Self, ModelError>

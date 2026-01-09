@@ -6,11 +6,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
 
+use crate::app::TextSelection;
 use crate::model::{ChatMessage, Role};
-use crate::tools::{
-    has_partial_thinking, parse_thinking_blocks, parse_tool_calls, remove_thinking_blocks,
-    remove_tool_calls,
-};
 use crate::tui::markdown::MarkdownRenderer;
 
 /// Widget for displaying chat messages
@@ -25,6 +22,10 @@ pub struct ChatView<'a> {
     welcome_message: &'a str,
     /// Width for rendering (set during render)
     render_width: Option<u16>,
+    /// Optional pre-computed cached lines (skips format_messages if present)
+    cached_lines: Option<&'a [Line<'static>]>,
+    /// Optional text selection for highlighting
+    selection: Option<&'a TextSelection>,
 }
 
 impl<'a> ChatView<'a> {
@@ -47,7 +48,15 @@ impl<'a> ChatView<'a> {
             renderer: MarkdownRenderer::new(),
             welcome_message,
             render_width: None,
+            cached_lines: None,
+            selection: None,
         }
+    }
+
+    /// Set the text selection for highlighting
+    pub fn with_selection(mut self, selection: Option<&'a TextSelection>) -> Self {
+        self.selection = selection;
+        self
     }
 
     /// Set the rendering width (for code blocks to extend to full width)
@@ -56,16 +65,19 @@ impl<'a> ChatView<'a> {
         self
     }
 
-    /// Get the total content height in lines
-    /// Note: This is an estimate since we can't know exact wrapped height without rendering
-    pub fn content_height(&mut self, area_width: u16) -> u16 {
-        self.render_width = Some(area_width);
-        let lines = self.format_messages();
+    /// Use pre-computed cached lines instead of formatting
+    pub fn with_cached_lines(mut self, lines: &'a [Line<'static>]) -> Self {
+        self.cached_lines = Some(lines);
+        self
+    }
+
+    /// Get the total content height in lines from cached lines
+    pub fn content_height_from_lines(lines: &[Line<'static>], area_width: u16) -> u16 {
         let mut total_lines: u16 = 0;
 
         // Account for text wrapping - estimate wrapped lines
         let usable_width = area_width.saturating_sub(2) as usize; // minus borders
-        for line in &lines {
+        for line in lines {
             // Use character count, not byte length (important for Unicode like ─)
             let line_len: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
             if usable_width > 0 && line_len > 0 {
@@ -80,328 +92,24 @@ impl<'a> ChatView<'a> {
         total_lines
     }
 
-    /// Format a tool call as a nice UI box
-    fn format_tool_call(&self, tool_name: &str, params: &str) -> Vec<Line<'static>> {
-        let width = self.render_width.unwrap_or(60) as usize;
-        let box_width = width.saturating_sub(4).min(70); // Max 70 chars for the box
+    /// Get the total content height in lines
+    /// Note: This is an estimate since we can't know exact wrapped height without rendering
+    #[allow(dead_code)]
+    pub fn content_height(&mut self, area_width: u16) -> u16 {
+        self.render_width = Some(area_width);
 
-        let mut lines = Vec::new();
-
-        // Truncate URL/params if too long
-        let display_params = if params.len() > box_width - 10 {
-            format!("{}...", &params[..box_width - 13])
-        } else {
-            params.to_string()
-        };
-
-        // Top border with tool name
-        let header = format!("┌─ {} ", tool_name);
-        let header_dashes = "─".repeat(box_width.saturating_sub(header.chars().count() + 1));
-        lines.push(Line::from(vec![
-            Span::styled(header, Style::default().fg(Color::Magenta)),
-            Span::styled(header_dashes + "┐", Style::default().fg(Color::DarkGray)),
-        ]));
-
-        // Content line
-        let content = format!("│ {} ", display_params);
-        let padding = " ".repeat(box_width.saturating_sub(content.chars().count()));
-        lines.push(Line::from(vec![
-            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-            Span::styled(display_params, Style::default().fg(Color::Cyan)),
-            Span::styled(padding + "│", Style::default().fg(Color::DarkGray)),
-        ]));
-
-        // Bottom border
-        lines.push(Line::from(Span::styled(
-            format!("└{}┘", "─".repeat(box_width.saturating_sub(2))),
-            Style::default().fg(Color::DarkGray),
-        )));
-
-        lines
-    }
-
-    /// Format an animated tool loading indicator
-    fn format_tool_loading(&self) -> Vec<Line<'static>> {
-        let width = self.render_width.unwrap_or(60) as usize;
-        let box_width = width.saturating_sub(4).min(70);
-
-        let mut lines = Vec::new();
-
-        // Animated spinner
-        let spinner_frames = ["\u{25D0}", "\u{25D3}", "\u{25D1}", "\u{25D2}"];
-        let frame = spinner_frames[(self.tick as usize / 2) % spinner_frames.len()];
-
-        // Top border with spinner
-        let header = format!("\u{250C}\u{2500} {} Preparing tool call ", frame);
-        let header_dashes = "\u{2500}".repeat(box_width.saturating_sub(header.chars().count() + 1));
-        lines.push(Line::from(vec![
-            Span::styled(header, Style::default().fg(Color::Magenta)),
-            Span::styled(header_dashes + "\u{2510}", Style::default().fg(Color::DarkGray)),
-        ]));
-
-        // Content line with animated dots
-        let dots = ".".repeat(((self.tick as usize / 3) % 4) + 1);
-        let padding = " ".repeat(4 - dots.len());
-        lines.push(Line::from(vec![
-            Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("Reading parameters{}{}", dots, padding),
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
-            ),
-        ]));
-
-        // Bottom border
-        lines.push(Line::from(Span::styled(
-            format!("\u{2514}{}\u{2518}", "\u{2500}".repeat(box_width.saturating_sub(2))),
-            Style::default().fg(Color::DarkGray),
-        )));
-
-        lines
-    }
-
-    /// Format an animated thinking indicator
-    fn format_thinking_indicator(&self) -> Vec<Line<'static>> {
-        // Fun thinking messages that rotate
-        const THINKING_MESSAGES: &[&str] = &[
-            "Pondering the possibilities",
-            "Consulting the neural pathways",
-            "Assembling thoughts",
-            "Weaving ideas together",
-            "Processing your request",
-            "Exploring solution space",
-            "Connecting the dots",
-            "Synthesizing response",
-            "Diving into the problem",
-            "Crafting an answer",
-            "Analyzing the question",
-            "Gathering insights",
-        ];
-
-        // Brainwave animation frames
-        const BRAIN_FRAMES: &[&str] = &[
-            "🧠 ∿∿∿",
-            "🧠 ∿∿∿∿",
-            "🧠 ~∿∿∿",
-            "🧠 ~~∿∿",
-            "🧠 ~~~∿",
-            "🧠 ~~~~",
-            "🧠 ∿~~~",
-            "🧠 ∿∿~~",
-            "🧠 ∿∿∿~",
-        ];
-
-        let message_idx = (self.tick as usize / 8) % THINKING_MESSAGES.len();
-        let frame_idx = (self.tick as usize) % BRAIN_FRAMES.len();
-
-        let message = THINKING_MESSAGES[message_idx];
-        let brain = BRAIN_FRAMES[frame_idx];
-
-        // Typewriter effect for the message
-        let chars_to_show = ((self.tick % 32) as usize * 2).min(message.len());
-        let displayed_message = if chars_to_show < message.len() {
-            format!("{}▊", &message[..chars_to_show])
-        } else {
-            format!("{}...", message)
-        };
-
-        let mut lines = Vec::new();
-
-        lines.push(Line::from(vec![
-            Span::styled(
-                brain.to_string(),
-                Style::default().fg(Color::Magenta),
-            ),
-        ]));
-
-        lines.push(Line::from(vec![
-            Span::styled(
-                displayed_message,
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::ITALIC),
-            ),
-        ]));
-
-        lines
-    }
-
-    /// Format a thinking block with a collapsible appearance
-    fn format_thinking_block(&self, content: &str) -> Vec<Line<'static>> {
-        let width = self.render_width.unwrap_or(60) as usize;
-        let box_width = width.saturating_sub(4).min(70);
-
-        let mut lines = Vec::new();
-
-        // Header with collapse indicator (visual only - not interactive yet)
-        let header = "▶ Thinking";
-        lines.push(Line::from(vec![
-            Span::styled(
-                header.to_string(),
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::DIM),
-            ),
-            Span::styled(
-                format!(" {} ", "─".repeat(box_width.saturating_sub(header.chars().count() + 3))),
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
-            ),
-        ]));
-
-        // Show a preview of the thinking content (first 2 lines, dimmed)
-        let preview_lines: Vec<&str> = content
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .take(2)
-            .collect();
-
-        for preview_line in preview_lines {
-            let truncated = if preview_line.len() > box_width - 4 {
-                format!("{}...", &preview_line[..box_width - 7])
-            } else {
-                preview_line.to_string()
-            };
-            lines.push(Line::from(vec![
-                Span::styled("  ", Style::default()),
-                Span::styled(
-                    truncated,
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC | Modifier::DIM),
-                ),
-            ]));
+        // Use cached lines if available
+        if let Some(cached) = self.cached_lines {
+            return Self::content_height_from_lines(cached, area_width);
         }
 
-        // Show ellipsis if there's more content
-        let total_lines = content.lines().filter(|l| !l.trim().is_empty()).count();
-        if total_lines > 2 {
-            lines.push(Line::from(vec![
-                Span::styled("  ", Style::default()),
-                Span::styled(
-                    format!("... ({} more lines)", total_lines - 2),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM),
-                ),
-            ]));
-        }
-
-        lines.push(Line::from("")); // Add spacing after thinking block
-
-        lines
+        let lines = self.format_messages();
+        Self::content_height_from_lines(&lines, area_width)
     }
 
-    /// Format an active thinking animation during streaming
-    fn format_thinking_streaming(&self) -> Vec<Line<'static>> {
-        let width = self.render_width.unwrap_or(60) as usize;
-        let box_width = width.saturating_sub(4).min(70);
-
-        let mut lines = Vec::new();
-
-        // Animated brain icon
-        let brain_frames = ["🧠", "🧠", "💭", "💭"];
-        let frame = brain_frames[(self.tick as usize / 3) % brain_frames.len()];
-
-        // Animated dots
-        let dots = ".".repeat(((self.tick as usize / 2) % 4) + 1);
-        let padding = " ".repeat(4 - dots.len());
-
-        let header = format!("{} Thinking{}{}", frame, dots, padding);
-        lines.push(Line::from(vec![
-            Span::styled(
-                header,
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" {}", "─".repeat(box_width.saturating_sub(20))),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]));
-
-        lines
-    }
-
-    /// Format a tool result as a summary box
-    fn format_tool_result(&self, content: &str) -> Vec<Line<'static>> {
-        let width = self.render_width.unwrap_or(60) as usize;
-        let box_width = width.saturating_sub(4).min(70);
-
-        let mut lines = Vec::new();
-
-        // Parse the tool result header (e.g., "[Tool: fetch]")
-        let (tool_name, result_content) = if content.starts_with("[Tool: ") {
-            if let Some(end) = content.find("]\n") {
-                let name = &content[7..end];
-                let rest = &content[end + 2..];
-                (name.to_string(), rest.to_string())
-            } else {
-                ("fetch".to_string(), content.to_string())
-            }
-        } else {
-            ("result".to_string(), content.to_string())
-        };
-
-        // Calculate content size
-        let content_bytes = result_content.len();
-        let size_str = if content_bytes > 1024 * 1024 {
-            format!("{:.1} MB", content_bytes as f64 / (1024.0 * 1024.0))
-        } else if content_bytes > 1024 {
-            format!("{:.1} KB", content_bytes as f64 / 1024.0)
-        } else {
-            format!("{} bytes", content_bytes)
-        };
-
-        // Top border
-        let header = format!("┌─ {} result ", tool_name);
-        let header_dashes = "─".repeat(box_width.saturating_sub(header.chars().count() + 1));
-        lines.push(Line::from(vec![
-            Span::styled(header, Style::default().fg(Color::Yellow)),
-            Span::styled(header_dashes + "┐", Style::default().fg(Color::DarkGray)),
-        ]));
-
-        // Size info line
-        lines.push(Line::from(vec![
-            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("Received {} of data", size_str), Style::default().fg(Color::DarkGray)),
-        ]));
-
-        // Show first few meaningful lines as preview
-        let preview_lines: Vec<&str> = result_content
-            .lines()
-            .filter(|l| !l.trim().is_empty() && !l.starts_with("<?xml") && !l.starts_with("<!"))
-            .take(3)
-            .collect();
-
-        for preview_line in preview_lines {
-            let truncated = if preview_line.len() > box_width - 4 {
-                format!("{}...", &preview_line[..box_width - 7])
-            } else {
-                preview_line.to_string()
-            };
-            lines.push(Line::from(vec![
-                Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-                Span::styled(truncated, Style::default().fg(Color::White)),
-            ]));
-        }
-
-        if result_content.lines().count() > 3 {
-            lines.push(Line::from(vec![
-                Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-                Span::styled("...", Style::default().fg(Color::DarkGray)),
-            ]));
-        }
-
-        // Bottom border
-        lines.push(Line::from(Span::styled(
-            format!("└{}┘", "─".repeat(box_width.saturating_sub(2))),
-            Style::default().fg(Color::DarkGray),
-        )));
-
-        lines
-    }
-
-    fn format_messages(&mut self) -> Vec<Line<'static>> {
+    /// Format all messages into renderable lines
+    /// This is the expensive operation that should be cached
+    pub fn format_messages(&mut self) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
 
         // Set width on renderer if available
@@ -466,6 +174,11 @@ impl<'a> ChatView<'a> {
         }
 
         for msg in self.messages.iter().filter(|m| m.role != Role::System) {
+            // Skip todo tool messages entirely - they're visible in the side pane
+            if msg.role == Role::Tool && msg.content.starts_with("[Tool: todo]") {
+                continue;
+            }
+
             // Add role header
             let (role_text, role_style) = match msg.role {
                 Role::User => (
@@ -503,37 +216,17 @@ impl<'a> ChatView<'a> {
                     }
                 }
                 Role::Assistant => {
-                    // First, handle thinking blocks
-                    let thinking_blocks = parse_thinking_blocks(&msg.content);
-                    for thinking in &thinking_blocks {
-                        lines.extend(self.format_thinking_block(&thinking.content));
-                    }
-
-                    // Remove thinking blocks from content for further processing
-                    let content_without_thinking = remove_thinking_blocks(&msg.content);
-
-                    // Check for tool calls and render them specially
-                    let tool_calls = parse_tool_calls(&content_without_thinking);
-                    if !tool_calls.is_empty() {
-                        // Render tool calls as nice boxes
-                        for tool_call in &tool_calls {
-                            lines.extend(self.format_tool_call(&tool_call.name, &tool_call.params));
-                        }
-                        // Render remaining text (without tool call XML)
-                        let cleaned = remove_tool_calls(&content_without_thinking);
-                        if !cleaned.is_empty() {
-                            let rendered = self.renderer.render(&cleaned);
-                            lines.extend(rendered);
-                        }
-                    } else if !content_without_thinking.is_empty() {
-                        // Normal assistant message (without thinking blocks)
-                        let rendered = self.renderer.render(&content_without_thinking);
+                    // Render assistant message as markdown
+                    if !msg.content.is_empty() {
+                        let rendered = self.renderer.render(&msg.content);
                         lines.extend(rendered);
                     }
                 }
                 Role::Tool => {
-                    // Tool results: show summary box
-                    lines.extend(self.format_tool_result(&msg.content));
+                    // Tool results: just show as plain text
+                    for line in msg.content.lines() {
+                        lines.push(Line::from(line.to_string()));
+                    }
                 }
                 Role::System => {}
             }
@@ -551,78 +244,20 @@ impl<'a> ChatView<'a> {
                     .add_modifier(Modifier::BOLD),
             )]));
 
-            // Render streaming response - handle thinking and tool calls specially
+            // Render streaming response
             if !self.current_response.is_empty() {
-                // First, check for partial thinking block (show animation)
-                if has_partial_thinking(self.current_response) {
-                    // Show "Thinking..." animation for partial thinking block
-                    lines.extend(self.format_thinking_streaming());
-                } else {
-                    // Handle completed thinking blocks
-                    let thinking_blocks = parse_thinking_blocks(self.current_response);
-                    for thinking in &thinking_blocks {
-                        lines.extend(self.format_thinking_block(&thinking.content));
-                    }
-
-                    // Get content without thinking blocks
-                    let content_without_thinking = remove_thinking_blocks(self.current_response);
-
-                    // Check for tool calls in streaming content
-                    let tool_calls = parse_tool_calls(&content_without_thinking);
-                    if !tool_calls.is_empty() {
-                        // Render completed tool calls as nice boxes
-                        for tool_call in &tool_calls {
-                            lines.extend(self.format_tool_call(&tool_call.name, &tool_call.params));
-                        }
-                        // Render remaining text (without tool call XML)
-                        let cleaned = remove_tool_calls(&content_without_thinking);
-                        if !cleaned.trim().is_empty() {
-                            let rendered = self.renderer.render(&cleaned);
-                            lines.extend(rendered);
-                        }
-                    } else {
-                        // Check for partial tool call being typed (hide it)
-                        let has_partial_tool_call = content_without_thinking.contains("<tool_use>")
-                            && !content_without_thinking.contains("</tool_use>");
-
-                        if has_partial_tool_call {
-                            // Split at <tool_use> and only show content before it
-                            if let Some(idx) = content_without_thinking.find("<tool_use>") {
-                                let before_tool = &content_without_thinking[..idx];
-                                if !before_tool.trim().is_empty() {
-                                    let rendered = self.renderer.render(before_tool);
-                                    lines.extend(rendered);
-                                }
-                                // Show "preparing tool call" indicator
-                                lines.extend(self.format_tool_loading());
-                            }
-                        } else if !content_without_thinking.trim().is_empty() {
-                            // Normal rendering
-                            let rendered = self.renderer.render(&content_without_thinking);
-                            lines.extend(rendered);
-                        }
-                    }
-                }
+                let rendered = self.renderer.render(self.current_response);
+                lines.extend(rendered);
             }
 
-            // Show animated cursor/indicator while generating
+            // Show animated cursor while generating
             if self.is_generating {
-                let is_in_thinking = has_partial_thinking(self.current_response);
-                let is_in_tool_call = self.current_response.contains("<tool_use>")
-                    && !self.current_response.contains("</tool_use>");
-
-                if self.current_response.is_empty() {
-                    // Show thinking animation when no response yet (waiting for thinking block)
-                    lines.extend(self.format_thinking_streaming());
-                } else if !is_in_thinking && !is_in_tool_call {
-                    // Show simple cursor when mid-response (but not during thinking or tool call)
-                    lines.push(Line::from(vec![Span::styled(
-                        "▊".to_string(),
-                        Style::default()
-                            .fg(Color::Green)
-                            .add_modifier(Modifier::SLOW_BLINK),
-                    )]));
-                }
+                lines.push(Line::from(vec![Span::styled(
+                    "▊".to_string(),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::SLOW_BLINK),
+                )]));
             }
         }
 
@@ -637,7 +272,20 @@ impl Widget for ChatView<'_> {
     fn render(mut self, area: Rect, buf: &mut Buffer) {
         // Set width for code blocks to extend to full chat width
         self.render_width = Some(area.width);
-        let lines = self.format_messages();
+
+        // Use cached lines if available, otherwise format
+        let lines: Vec<Line<'static>> = if let Some(cached) = self.cached_lines {
+            cached.to_vec()
+        } else {
+            self.format_messages()
+        };
+
+        // Apply selection highlighting if active
+        let lines = if let Some(selection) = self.selection {
+            apply_selection_highlight(lines, selection, self.scroll)
+        } else {
+            lines
+        };
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -651,4 +299,132 @@ impl Widget for ChatView<'_> {
 
         paragraph.render(area, buf);
     }
+}
+
+/// Apply selection highlighting to lines
+fn apply_selection_highlight(
+    lines: Vec<Line<'static>>,
+    selection: &TextSelection,
+    _scroll: u16,
+) -> Vec<Line<'static>> {
+    let ((start_row, start_col), (end_row, end_col)) = selection.normalized();
+    let highlight_style = Style::default().bg(Color::Blue).fg(Color::White);
+
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(row_idx, line)| {
+            let row = row_idx as u16;
+
+            // Check if this line intersects with selection
+            if row < start_row || row > end_row {
+                return line;
+            }
+
+            // Determine selection bounds for this line
+            let line_start = if row == start_row { start_col as usize } else { 0 };
+            let line_end = if row == end_row {
+                end_col as usize
+            } else {
+                usize::MAX
+            };
+
+            // Apply highlighting to spans
+            let mut new_spans: Vec<Span<'static>> = Vec::new();
+            let mut char_pos = 0usize;
+
+            for span in line.spans {
+                let span_len = span.content.chars().count();
+                let span_start = char_pos;
+                let span_end = char_pos + span_len;
+
+                if span_end <= line_start || span_start >= line_end {
+                    // Span is entirely outside selection
+                    new_spans.push(span);
+                } else if span_start >= line_start && span_end <= line_end {
+                    // Span is entirely inside selection
+                    new_spans.push(Span::styled(span.content, highlight_style));
+                } else {
+                    // Span partially overlaps - split it
+                    let content: String = span.content.to_string();
+                    let chars: Vec<char> = content.chars().collect();
+
+                    // Before selection
+                    if span_start < line_start {
+                        let before_len = line_start - span_start;
+                        let before: String = chars[..before_len].iter().collect();
+                        new_spans.push(Span::styled(before, span.style));
+                    }
+
+                    // Selected portion
+                    let sel_start = line_start.saturating_sub(span_start);
+                    let sel_end = (line_end - span_start).min(span_len);
+                    if sel_start < sel_end {
+                        let selected: String = chars[sel_start..sel_end].iter().collect();
+                        new_spans.push(Span::styled(selected, highlight_style));
+                    }
+
+                    // After selection
+                    if span_end > line_end {
+                        let after_start = line_end - span_start;
+                        let after: String = chars[after_start..].iter().collect();
+                        new_spans.push(Span::styled(after, span.style));
+                    }
+                }
+
+                char_pos = span_end;
+            }
+
+            Line::from(new_spans)
+        })
+        .collect()
+}
+
+/// Extract text from selection
+pub fn extract_selected_text(
+    lines: &[Line<'static>],
+    selection: &TextSelection,
+    _scroll: u16,
+) -> String {
+    let ((start_row, start_col), (end_row, end_col)) = selection.normalized();
+    let mut result = String::new();
+
+    for (row_idx, line) in lines.iter().enumerate() {
+        let row = row_idx as u16;
+
+        // Skip lines outside selection
+        if row < start_row || row > end_row {
+            continue;
+        }
+
+        // Get full line text
+        let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+
+        // Determine selection bounds for this line
+        let line_start = if row == start_row {
+            start_col as usize
+        } else {
+            0
+        };
+        let line_end = if row == end_row {
+            end_col as usize
+        } else {
+            line_text.chars().count()
+        };
+
+        // Extract selected portion
+        let chars: Vec<char> = line_text.chars().collect();
+        let selected: String = chars
+            .get(line_start..line_end.min(chars.len()))
+            .unwrap_or(&[])
+            .iter()
+            .collect();
+
+        if !result.is_empty() && row > start_row {
+            result.push('\n');
+        }
+        result.push_str(&selected);
+    }
+
+    result
 }

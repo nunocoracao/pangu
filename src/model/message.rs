@@ -43,6 +43,7 @@ impl ChatMessage {
     }
 
     /// Create a new tool result message
+    #[allow(dead_code)]
     pub fn tool_result(tool_name: &str, result: impl Into<String>) -> Self {
         Self {
             role: Role::Tool,

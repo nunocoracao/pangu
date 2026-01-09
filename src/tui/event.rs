@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, KeyEventKind, MouseEvent};
+use crossterm::event::{Event as CrosstermEvent, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
 use futures::{FutureExt, StreamExt};
 use tokio::{
     sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
@@ -9,6 +9,7 @@ use tokio::{
 
 /// Application events
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum Event {
     /// Terminal tick for periodic updates
     Tick,
@@ -16,8 +17,16 @@ pub enum Event {
     Render,
     /// Key press
     Key(KeyEvent),
-    /// Mouse event
+    /// Pasted text (from bracketed paste)
+    Paste(String),
+    /// Mouse event (for scroll)
     Mouse(MouseEvent),
+    /// Mouse button pressed at (column, row)
+    MouseDown(u16, u16),
+    /// Mouse dragged to (column, row)
+    MouseDrag(u16, u16),
+    /// Mouse button released at (column, row)
+    MouseUp(u16, u16),
     /// Terminal resize
     Resize(u16, u16),
     /// Model download progress (downloaded, total, speed in bytes/sec)
@@ -32,6 +41,8 @@ pub enum Event {
     StreamDone,
     /// Streaming error
     StreamError(String),
+    /// Input tokens sent to model (for tracking)
+    InputTokens(usize),
     /// Tool execution started
     ToolExecutionStart(String),
     /// Tool execution completed with result
@@ -96,17 +107,32 @@ impl EventHandler {
                                         if key.kind != KeyEventKind::Press {
                                             continue;
                                         }
-                                        // Handle Ctrl+C for quit
-                                        if key.code == event::KeyCode::Char('c')
-                                            && key.modifiers.contains(event::KeyModifiers::CONTROL)
-                                        {
-                                            Event::Quit
-                                        } else {
-                                            Event::Key(key)
+                                        // Pass all key events through - Ctrl+C is handled in update.rs
+                                        // to support copy when text is selected
+                                        Event::Key(key)
+                                    }
+                                    CrosstermEvent::Paste(text) => {
+                                        // Bracketed paste - multiline text pasted at once
+                                        Event::Paste(text)
+                                    }
+                                    CrosstermEvent::Resize(w, h) => Event::Resize(w, h),
+                                    CrosstermEvent::Mouse(mouse) => {
+                                        match mouse.kind {
+                                            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                                                Event::Mouse(mouse)
+                                            }
+                                            MouseEventKind::Down(_) => {
+                                                Event::MouseDown(mouse.column, mouse.row)
+                                            }
+                                            MouseEventKind::Drag(_) => {
+                                                Event::MouseDrag(mouse.column, mouse.row)
+                                            }
+                                            MouseEventKind::Up(_) => {
+                                                Event::MouseUp(mouse.column, mouse.row)
+                                            }
+                                            _ => continue,
                                         }
                                     }
-                                    CrosstermEvent::Mouse(mouse) => Event::Mouse(mouse),
-                                    CrosstermEvent::Resize(w, h) => Event::Resize(w, h),
                                     _ => continue,
                                 };
                                 if tx_clone.send(event).is_err() {

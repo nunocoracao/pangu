@@ -44,6 +44,9 @@ async-trait = "0.1"
 url = "2"
 urlencoding = "2"
 
+# Clipboard
+arboard = "3"
+
 # Unix signal handling
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

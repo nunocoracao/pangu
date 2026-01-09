@@ -32,6 +32,7 @@ pub static SETTINGS: LazyLock<Settings> = LazyLock::new(|| {
 });
 
 /// Embedded resources - llama-server extracted, configs in memory
+#[allow(dead_code)]
 pub struct EmbeddedResources {
     /// Base directory for Pangu data (~/.pangu)
     pub base_dir: PathBuf,
@@ -82,11 +83,13 @@ impl EmbeddedResources {
     }
 
     /// Get the expected model path
+    #[allow(dead_code)]
     pub fn model_path(&self) -> PathBuf {
         self.model_dir.join(&SETTINGS.model.filename)
     }
 
     /// Check if the model exists
+    #[allow(dead_code)]
     pub fn model_exists(&self) -> bool {
         self.model_path().exists()
     }

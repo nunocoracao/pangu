@@ -51,6 +51,22 @@ cargo build --release
 
 Phase 1: Basic chat TUI with streaming responses
 
+## UX Principles for Local Models
+
+Local models are significantly slower than cloud APIs. To make the experience feel responsive:
+
+1. **Always provide visibility** - Show elapsed time, token count, and progress during generation
+2. **Never leave users guessing** - Animated indicators, progress bars, and status updates
+3. **Allow interruption** - Escape key to cancel long-running operations
+4. **Front-load context** - Auto-scan working directory so the model knows what exists
+5. **Stream everything** - Show tokens as they arrive, not just at the end
+
+Key UX components:
+- Status bar shows "Generating... (Esc to cancel)"
+- Thinking indicator shows elapsed time and token count: "🧠 Thinking... (45s, 234 tokens)"
+- Tool preparation shows bytes received: "Receiving... (2.3 KB)"
+- Working directory scanned on startup for immediate context
+
 ## Tech Stack
 
 - Rust 2021 edition

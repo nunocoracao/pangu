@@ -10,6 +10,7 @@ use futures::StreamExt;
 
 /// Download error types
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum DownloadError {
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
@@ -36,6 +37,7 @@ pub struct DownloadProgress {
 
 impl DownloadProgress {
     /// Get progress as a percentage (0.0 to 1.0)
+    #[allow(dead_code)]
     pub fn percentage(&self) -> f64 {
         if self.total == 0 {
             0.0
@@ -45,11 +47,13 @@ impl DownloadProgress {
     }
 
     /// Format downloaded/total as human readable string
+    #[allow(dead_code)]
     pub fn size_string(&self) -> String {
         format!("{} / {}", format_bytes(self.downloaded), format_bytes(self.total))
     }
 
     /// Format speed as human readable string
+    #[allow(dead_code)]
     pub fn speed_string(&self) -> String {
         format!("{}/s", format_bytes(self.speed as u64))
     }

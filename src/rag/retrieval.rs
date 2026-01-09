@@ -258,6 +258,8 @@ mod tests {
             role: role.to_string(),
             content: content.to_string(),
             conversation_id: "test".to_string(),
+            project_id: "test_proj".to_string(),
+            branch: "main".to_string(),
         }
     }
 

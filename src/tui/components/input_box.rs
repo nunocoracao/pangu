@@ -26,7 +26,7 @@ impl InputBox {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray))
-                .title(" Message (Enter to send, Shift+Enter for newline) "),
+                .title(" Message (Enter to send, Alt+Enter for newline) "),
         );
         Self { textarea }
     }
@@ -36,12 +36,23 @@ impl InputBox {
     /// Returns Some(text) if the user submitted the message (Enter without Shift)
     pub fn handle_input(&mut self, key: KeyEvent) -> Option<String> {
         match key.code {
-            // Shift+Enter = insert newline
+            // Alt+Enter or Shift+Enter = insert newline
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.textarea.insert_newline();
+                None
+            }
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.textarea.insert_newline();
                 None
             }
-            // Enter without Shift = submit
+            // Some terminals send modified Enter as Char('\n') or Char('\r')
+            KeyCode::Char('\n') | KeyCode::Char('\r')
+                if key.modifiers.contains(KeyModifiers::SHIFT)
+                || key.modifiers.contains(KeyModifiers::ALT) => {
+                self.textarea.insert_newline();
+                None
+            }
+            // Enter without modifiers = submit
             KeyCode::Enter => {
                 let text = self.textarea.lines().join("\n");
                 if text.trim().is_empty() {
@@ -54,7 +65,7 @@ impl InputBox {
                     Block::default()
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(Color::DarkGray))
-                        .title(" Message (Enter to send, Shift+Enter for newline) "),
+                        .title(" Message (Enter to send, Alt+Enter for newline) "),
                 );
                 Some(text)
             }
@@ -67,6 +78,7 @@ impl InputBox {
     }
 
     /// Get the current input text
+    #[allow(dead_code)]
     pub fn text(&self) -> String {
         self.textarea.lines().join("\n")
     }
@@ -80,11 +92,24 @@ impl InputBox {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray))
-                .title(" Message (Enter to send, Shift+Enter for newline) "),
+                .title(" Message (Enter to send, Alt+Enter for newline) "),
         );
     }
 
+    /// Insert text at cursor position (used for paste)
+    pub fn insert_text(&mut self, text: &str) {
+        // Insert each character, handling newlines properly
+        for c in text.chars() {
+            if c == '\n' {
+                self.textarea.insert_newline();
+            } else {
+                self.textarea.insert_char(c);
+            }
+        }
+    }
+
     /// Check if the input is empty
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.textarea.lines().iter().all(|l| l.is_empty())
     }

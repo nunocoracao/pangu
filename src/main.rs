@@ -3,15 +3,13 @@ mod app;
 mod config;
 mod embedded;
 mod model;
-mod permissions;
 mod rag;
-mod tools;
 mod tui;
 mod update;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use clap::Parser;
 use color_eyre::Result;
@@ -26,6 +24,7 @@ pub fn set_llama_server_pid(pid: u32) {
     LLAMA_SERVER_PID.store(pid, Ordering::SeqCst);
     tracing::info!("Registered llama-server PID: {}", pid);
 }
+
 
 /// Kill the llama-server process if running
 fn kill_llama_server() {
@@ -54,14 +53,10 @@ fn kill_llama_server() {
     }
 }
 
-use std::sync::RwLock;
-
 use app::App;
 use embedded::SETTINGS;
-use model::{ChatMessage, DownloadProgress, InferenceConfig, LlamaServerBackend, ModelBackend, ModelDownloader, ModelParams, StreamEvent};
-use permissions::Permission;
+use model::{DownloadProgress, InferenceConfig, LlamaServerBackend, ModelBackend, ModelDownloader, ModelParams, StreamEvent, truncate_to_context};
 use rag::{ConversationStore, Retriever};
-use tools::{parse_tool_calls, TodoList, ToolRegistry};
 use tui::{ui, Event, EventHandler};
 use update::{apply_action, handle_event};
 
@@ -140,37 +135,55 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Create shared todo list for app and tools
-    let todo_list = Arc::new(RwLock::new(TodoList::new()));
-
-    // Create application state with shared todo list
-    let mut app = App::with_todo_list(todo_list.clone());
+    // Create application state
+    let mut app = App::new();
 
     // Set max context size for display
     app.set_max_context(context_size as usize);
 
     // Set the embedded welcome/system messages
     app.welcome_message = resources.welcome_message().to_string();
+
+    // Set system prompt
     app.set_system_prompt(resources.system_prompt());
 
-    // Initialize RAG system
-    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // Initialize RAG system (stores in ~/.pangu/history/)
     let conversation_store = Arc::new(
-        ConversationStore::new(&current_dir)
+        ConversationStore::new()
             .expect("Failed to initialize conversation store")
     );
     let retriever = Arc::new(Retriever::new());
 
-    // Load history for RAG
-    let rag_history = Arc::new(RwLock::new(
-        conversation_store.load_all().unwrap_or_default()
-    ));
+    // Start with empty history, load in background
+    let rag_history = Arc::new(RwLock::new(Vec::new()));
 
-    tracing::info!(
-        "RAG initialized: {} historical messages from {} sessions",
-        rag_history.read().unwrap().len(),
-        conversation_store.session_count()
-    );
+    // Spawn background task to load RAG history
+    {
+        let rag_history = rag_history.clone();
+        let conversation_store = conversation_store.clone();
+        std::thread::spawn(move || {
+            let loaded = conversation_store.load_all().unwrap_or_default();
+            let count = loaded.len();
+            let session_count = conversation_store.session_count();
+            let project_id = conversation_store.project_id().to_string();
+            let branch = conversation_store.branch().to_string();
+
+            // Update the shared history
+            if let Ok(mut history) = rag_history.write() {
+                *history = loaded;
+            }
+
+            tracing::info!(
+                "RAG loaded: {} historical messages from {} sessions (project: {}, branch: {})",
+                count,
+                session_count,
+                project_id,
+                branch
+            );
+        });
+    }
+
+    tracing::info!("RAG initialization started in background");
 
     // Create event handler
     let mut events = EventHandler::new(SETTINGS.ui.tick_rate, SETTINGS.ui.frame_rate);
@@ -250,12 +263,6 @@ async fn main() -> Result<()> {
         stop_sequences: vec![],
     };
 
-    // Tool registry for agent capabilities (shares todo list with app)
-    let tool_registry = Arc::new(ToolRegistry::with_todo_list(todo_list));
-
-    // Set available tool names on app for UI display
-    app.set_tool_names(tool_registry.tool_names().to_vec());
-
     // Keep copies for model loading after download
     let server_path_for_load = resources.llama_server_path.clone();
 
@@ -317,214 +324,17 @@ async fn main() -> Result<()> {
                 Event::DownloadError(e) => {
                     app.set_error(format!("Download failed: {}", e));
                 }
-                // Handle tool execution events
-                Event::ToolExecutionStart(tool_name) => {
-                    app.start_tool_execution(&tool_name);
-                }
-                Event::ToolExecutionDone(tool_name, result) => {
-                    // Add tool result to messages
-                    app.add_tool_result(&tool_name, result);
-                    // Continue generation with tool results
-                    app.start_generating();
-
-                    // Clone what we need for the generation task
-                    let messages: Vec<ChatMessage> = app.messages.clone();
-                    let config = inference_config.clone();
-                    let model_arc = model.clone();
-                    let event_tx_gen = event_tx.clone();
-
-                    // Run generation in blocking task
-                    tokio::task::spawn_blocking(move || {
-                        let mut guard = model_arc.lock().unwrap();
-                        if let Some(ref mut backend) = *guard {
-                            let (stream_tx, stream_rx) = mpsc::unbounded_channel::<StreamEvent>();
-
-                            let event_tx_forward = event_tx_gen.clone();
-                            std::thread::spawn(move || {
-                                let rt = tokio::runtime::Builder::new_current_thread()
-                                    .enable_all()
-                                    .build()
-                                    .unwrap();
-                                rt.block_on(async {
-                                    let mut rx = stream_rx;
-                                    while let Some(stream_event) = rx.recv().await {
-                                        let event = match stream_event {
-                                            StreamEvent::Token(token) => Event::StreamToken(token),
-                                            StreamEvent::Done => Event::StreamDone,
-                                            StreamEvent::Error(e) => Event::StreamError(e),
-                                        };
-                                        if event_tx_forward.send(event).is_err() {
-                                            break;
-                                        }
-                                    }
-                                });
-                            });
-
-                            if let Err(e) = backend.generate_stream(&messages, &config, stream_tx) {
-                                let _ = event_tx_gen.send(Event::StreamError(e.to_string()));
-                            }
-                        }
-                    });
-                }
-                Event::ToolExecutionError(error) => {
-                    app.set_error(format!("Tool execution failed: {}", error));
-                }
-                Event::PermissionGranted(tool_name, tool_params) => {
-                    // Execute the tool now that permission is granted
-                    let registry = tool_registry.clone();
-                    let event_tx_tool = event_tx.clone();
-
-                    let _ = event_tx_tool.send(Event::ToolExecutionStart(tool_name.clone()));
-
-                    tokio::spawn(async move {
-                        match registry.execute(&tools::ToolCall {
-                            name: tool_name.clone(),
-                            params: tool_params,
-                            start: 0,
-                            end: 0,
-                        }).await {
-                            Ok(result) => {
-                                let _ = event_tx_tool.send(Event::ToolExecutionDone(tool_name, result));
-                            }
-                            Err(e) => {
-                                let _ = event_tx_tool.send(Event::ToolExecutionError(e.to_string()));
-                            }
-                        }
-                    });
-                }
-                Event::PermissionDenied(tool_name, _tool_params) => {
-                    // Add a denial message to the chat
-                    app.add_tool_result(&tool_name, format!("[Permission denied for {} tool]", tool_name));
-                    // Continue generation with the denial message
-                    app.start_generating();
-
-                    let messages: Vec<ChatMessage> = app.messages.clone();
-                    let config = inference_config.clone();
-                    let model_arc = model.clone();
-                    let event_tx_gen = event_tx.clone();
-
-                    tokio::task::spawn_blocking(move || {
-                        let mut guard = model_arc.lock().unwrap();
-                        if let Some(ref mut backend) = *guard {
-                            let (stream_tx, stream_rx) = mpsc::unbounded_channel::<StreamEvent>();
-
-                            let event_tx_forward = event_tx_gen.clone();
-                            std::thread::spawn(move || {
-                                let rt = tokio::runtime::Builder::new_current_thread()
-                                    .enable_all()
-                                    .build()
-                                    .unwrap();
-                                rt.block_on(async {
-                                    let mut rx = stream_rx;
-                                    while let Some(stream_event) = rx.recv().await {
-                                        let event = match stream_event {
-                                            StreamEvent::Token(token) => Event::StreamToken(token),
-                                            StreamEvent::Done => Event::StreamDone,
-                                            StreamEvent::Error(e) => Event::StreamError(e),
-                                        };
-                                        if event_tx_forward.send(event).is_err() {
-                                            break;
-                                        }
-                                    }
-                                });
-                            });
-
-                            if let Err(e) = backend.generate_stream(&messages, &config, stream_tx) {
-                                let _ = event_tx_gen.send(Event::StreamError(e.to_string()));
-                            }
-                        }
-                    });
-                }
                 _ => {
                     let action = handle_event(&mut app, event.clone());
 
                     // Check if we need to start generation
                     let should_generate = matches!(action, action::Action::SubmitMessage(_));
 
-                    // Check if this is a permission response
-                    let is_permission_action = matches!(
-                        action,
-                        action::Action::PermissionConfirm
-                            | action::Action::PermissionRespond(_)
-                            | action::Action::PermissionSelectPrev
-                            | action::Action::PermissionSelectNext
-                    );
-
-                    // Check if this is FinishStreaming - we need to check for tool calls first
-                    if matches!(action, action::Action::FinishStreaming) {
-                        let tool_calls = parse_tool_calls(&app.current_response);
-
-                        if !tool_calls.is_empty() {
-                            // Save the assistant's partial response before tool execution
-                            if !app.current_response.is_empty() {
-                                app.messages.push(ChatMessage::assistant(&app.current_response));
-                                app.current_response.clear();
-                            }
-
-                            // Check permissions and execute tool calls
-                            for tool_call in tool_calls {
-                                let tool_name = tool_call.name.clone();
-                                let tool_params = tool_call.params.clone();
-
-                                // Skip permission check for safe tools (think, todo)
-                                let safe_tools = ["think", "todo"];
-                                let needs_permission = !safe_tools.contains(&tool_name.as_str());
-
-                                // Check permission (or auto-allow for safe tools)
-                                let (permission, _is_stored) = if needs_permission {
-                                    app.permission_manager.check_permission(&tool_name, &tool_params)
-                                } else {
-                                    (Permission::Always, false)
-                                };
-
-                                match permission {
-                                    Permission::Always => {
-                                        // Permission granted - execute immediately
-                                        let registry = tool_registry.clone();
-                                        let event_tx_tool = event_tx.clone();
-                                        let name = tool_name.clone();
-                                        let params = tool_params.clone();
-
-                                        let _ = event_tx_tool.send(Event::ToolExecutionStart(name.clone()));
-
-                                        tokio::spawn(async move {
-                                            match registry.execute(&tools::ToolCall {
-                                                name: name.clone(),
-                                                params,
-                                                start: 0,
-                                                end: 0,
-                                            }).await {
-                                                Ok(result) => {
-                                                    let _ = event_tx_tool.send(Event::ToolExecutionDone(name, result));
-                                                }
-                                                Err(e) => {
-                                                    let _ = event_tx_tool.send(Event::ToolExecutionError(e.to_string()));
-                                                }
-                                            }
-                                        });
-                                    }
-                                    Permission::Never => {
-                                        // Permission denied - add denial message
-                                        let _ = event_tx.send(Event::PermissionDenied(tool_name, tool_params));
-                                    }
-                                    Permission::Ask => {
-                                        // Need to ask user - show permission prompt
-                                        app.request_permission(&tool_name, &tool_params);
-                                        // Don't continue processing - wait for user response
-                                        continue;
-                                    }
-                                }
-                            }
-                            // Don't apply FinishStreaming - we'll continue after tool execution
-                            continue;
-                        }
-                    }
-
                     // Track if this is a FinishStreaming action (to store assistant message)
                     let is_finish_streaming = matches!(action, action::Action::FinishStreaming);
 
-                    // Apply the action and check for permission response
-                    let permission_response = apply_action(&mut app, action);
+                    // Apply the action
+                    apply_action(&mut app, action);
 
                     // Store assistant message to RAG after finishing
                     if is_finish_streaming {
@@ -537,28 +347,6 @@ async fn main() -> Result<()> {
                         }
                     }
 
-                    // Handle permission response
-                    if let Some(response) = permission_response {
-                        if let Some(pending) = app.handle_permission_response(response) {
-                            // Check if permission was granted or denied
-                            let (permission, _persist) = response.to_permission_and_persist();
-                            if permission == Permission::Always {
-                                // Send permission granted event
-                                let _ = event_tx.send(Event::PermissionGranted(
-                                    pending.tool_name,
-                                    pending.tool_params,
-                                ));
-                            } else {
-                                // Send permission denied event
-                                let _ = event_tx.send(Event::PermissionDenied(
-                                    pending.tool_name,
-                                    pending.tool_params,
-                                ));
-                            }
-                        }
-                        continue;
-                    }
-
                     // Start generation if needed
                     if should_generate {
                         // Get the last user message as query for RAG
@@ -568,21 +356,33 @@ async fn main() -> Result<()> {
                             .map(|m| m.content.clone())
                             .unwrap_or_default();
 
-                        // Build context with RAG (max 5 RAG messages + last 15 recent)
-                        // Keep it conservative to stay within context window
-                        let history = rag_history.read().unwrap().clone();
+                        // Build context with RAG (using config limits)
+                        let history_guard = rag_history.read().unwrap();
                         let system_prompt = resources.system_prompt();
                         let (context_messages, rag_count) = retriever.build_context(
                             &query,
-                            &history,
+                            &history_guard,
                             &app.messages,
                             Some(system_prompt),
-                            5,   // max RAG messages
-                            15,  // max recent messages
+                            SETTINGS.rag.max_rag_messages,
+                            SETTINGS.rag.max_recent_messages,
+                        );
+                        drop(history_guard); // Release lock early
+
+                        // Truncate context to prevent overflow
+                        let truncated_context = truncate_to_context(
+                            &context_messages,
+                            context_size as usize,
+                            inference_config.max_tokens as usize,
                         );
 
-                        // Update context usage display
-                        app.update_context_usage(rag_count);
+                        // Update context usage display with actual context being sent
+                        app.update_context_usage_from_context(&truncated_context, rag_count);
+
+                        // Estimate input tokens and track them
+                        let input_chars: usize = truncated_context.iter().map(|m| m.content.len()).sum();
+                        let input_tokens = input_chars / 3; // ~3 chars per token (conservative)
+                        app.add_input_tokens(input_tokens);
 
                         // Store the user message in RAG
                         if let Some(user_msg) = app.messages.iter().rev().find(|m| m.role == model::Role::User) {
@@ -623,8 +423,8 @@ async fn main() -> Result<()> {
                                     });
                                 });
 
-                                // Generate with RAG-augmented context
-                                if let Err(e) = backend.generate_stream(&context_messages, &config, stream_tx) {
+                                // Generate with RAG-augmented context (truncated to fit)
+                                if let Err(e) = backend.generate_stream(&truncated_context, &config, stream_tx) {
                                     let _ = event_tx_gen.send(Event::StreamError(e.to_string()));
                                 }
                             } else {

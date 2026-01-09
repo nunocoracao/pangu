@@ -1,8 +1,11 @@
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Alignment, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph, Widget},
@@ -12,6 +15,24 @@ use crate::app::AppState;
 
 /// Spinner frames for loading animation
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Cached working directory (computed once)
+static WORKING_DIR: OnceLock<String> = OnceLock::new();
+
+/// Cached git info with refresh tracking
+struct CachedGitInfo {
+    info: Option<GitInfo>,
+    last_refresh: Instant,
+}
+
+/// Global git cache using RwLock for safe concurrent access
+static GIT_INFO_CACHE: OnceLock<RwLock<Option<CachedGitInfo>>> = OnceLock::new();
+
+/// Flag to track if a background refresh is in progress
+static GIT_REFRESH_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+/// Git info refresh interval (5 seconds)
+const GIT_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Status bar showing app state, directory, and git info
 pub struct StatusBar<'a> {
@@ -25,17 +46,23 @@ impl<'a> StatusBar<'a> {
     }
 }
 
-fn get_working_dir() -> String {
-    std::env::current_dir()
-        .map(|p| {
-            p.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| p.display().to_string())
-        })
-        .unwrap_or_else(|_| "?".to_string())
+fn get_working_dir() -> &'static str {
+    WORKING_DIR.get_or_init(|| {
+        std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "?".to_string())
+    })
 }
 
-fn get_git_info() -> Option<(String, String)> {
+/// Git information: branch, status, and origin URL
+#[derive(Clone)]
+struct GitInfo {
+    branch: String,
+    status: String,
+    origin_url: Option<String>,
+}
+
+fn fetch_git_info() -> Option<GitInfo> {
     // Get branch
     let branch = Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
@@ -97,7 +124,86 @@ fn get_git_info() -> Option<(String, String)> {
         })
         .unwrap_or_default();
 
-    Some((branch, status))
+    // Get origin URL
+    let origin_url = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !url.is_empty() {
+                    // Clean up the URL for display
+                    let display_url = url
+                        .trim_start_matches("git@")
+                        .trim_start_matches("https://")
+                        .trim_start_matches("http://")
+                        .trim_end_matches(".git")
+                        .replace(':', "/");
+                    Some(display_url)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+
+    Some(GitInfo {
+        branch,
+        status,
+        origin_url,
+    })
+}
+
+/// Spawn a background thread to fetch git info
+fn spawn_git_refresh() {
+    // Only spawn if not already in progress
+    if GIT_REFRESH_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        std::thread::spawn(|| {
+            let info = fetch_git_info();
+            let cache = GIT_INFO_CACHE.get_or_init(|| RwLock::new(None));
+
+            if let Ok(mut guard) = cache.write() {
+                *guard = Some(CachedGitInfo {
+                    info,
+                    last_refresh: Instant::now(),
+                });
+            }
+
+            GIT_REFRESH_IN_PROGRESS.store(false, Ordering::SeqCst);
+        });
+    }
+}
+
+/// Get cached git info, spawning background refresh if stale
+fn get_git_info() -> Option<GitInfo> {
+    let cache = GIT_INFO_CACHE.get_or_init(|| RwLock::new(None));
+
+    // Try to read from cache
+    if let Ok(guard) = cache.read() {
+        if let Some(ref cached) = *guard {
+            let now = Instant::now();
+            if now.duration_since(cached.last_refresh) < GIT_REFRESH_INTERVAL {
+                return cached.info.clone();
+            }
+        }
+    }
+
+    // Cache is stale or empty - spawn background refresh
+    spawn_git_refresh();
+
+    // Return current cached value (or None if first call)
+    if let Ok(guard) = cache.read() {
+        if let Some(ref cached) = *guard {
+            return cached.info.clone();
+        }
+    }
+
+    None
 }
 
 impl Widget for StatusBar<'_> {
@@ -107,7 +213,7 @@ impl Widget for StatusBar<'_> {
         let (status_text, status_style) = match self.state {
             AppState::Idle => ("Ready".to_string(), Style::default().fg(Color::Green)),
             AppState::Generating => (
-                format!("{} Generating...", spinner_frame),
+                format!("{} Generating... (Esc to cancel)", spinner_frame),
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
@@ -122,18 +228,6 @@ impl Widget for StatusBar<'_> {
                 format!("{} Loading model...", spinner_frame),
                 Style::default()
                     .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            AppState::ExecutingTool(tool_name) => (
-                format!("{} Running {}...", spinner_frame, tool_name),
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            AppState::AwaitingPermission => (
-                format!("{} Awaiting permission...", spinner_frame),
-                Style::default()
-                    .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
             AppState::Error(msg) => (
@@ -153,52 +247,49 @@ impl Widget for StatusBar<'_> {
             ),
             Span::raw(" "),
             Span::styled(status_text, status_style),
-            Span::styled(
-                " │ ",
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(
-                "Ctrl+C",
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(
-                " quit",
-                Style::default().fg(Color::Rgb(80, 80, 80)),
-            ),
         ];
 
-        // Right side: directory and git info
+        // Right side: path badge and git badge
         let working_dir = get_working_dir();
         let git_info = get_git_info();
 
-        let mut right_spans = vec![
-            Span::styled("󰉋 ", Style::default().fg(Color::Yellow)),
-            Span::styled(working_dir, Style::default().fg(Color::White)),
-        ];
+        let mut right_spans = Vec::new();
 
-        if let Some((branch, status)) = git_info {
-            right_spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
-            right_spans.push(Span::styled(" ", Style::default().fg(Color::Magenta)));
-            right_spans.push(Span::styled(
-                branch,
-                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
-            ));
-            if !status.is_empty() {
+        // Git info badge (if available)
+        if let Some(info) = &git_info {
+            // Origin URL badge
+            if let Some(url) = &info.origin_url {
+                right_spans.push(Span::styled(
+                    format!(" {} ", url),
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(Color::Rgb(60, 60, 60)),
+                ));
                 right_spans.push(Span::raw(" "));
-                // Color the status parts
-                for part in status.split_whitespace() {
-                    let color = if part.starts_with('+') {
-                        Color::Green
-                    } else if part.starts_with('~') {
-                        Color::Yellow
-                    } else {
-                        Color::Red
-                    };
-                    right_spans.push(Span::styled(format!("{} ", part), Style::default().fg(color)));
-                }
             }
+
+            // Branch badge
+            let mut branch_text = format!(" {} ", info.branch);
+            if !info.status.is_empty() {
+                branch_text = format!(" {} {} ", info.branch, info.status);
+            }
+            right_spans.push(Span::styled(
+                branch_text,
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            right_spans.push(Span::raw(" "));
         }
-        right_spans.push(Span::raw(" "));
+
+        // Path badge
+        right_spans.push(Span::styled(
+            format!(" {} ", working_dir),
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow),
+        ));
 
         // Calculate widths
         let left_width: usize = left_spans.iter().map(|s| s.content.len()).sum();

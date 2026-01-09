@@ -3,7 +3,7 @@ use ratatui::{
     Frame,
 };
 
-use super::components::{ChatView, LoadingScreen, LoadingState, PermissionPrompt, SidePane, StatusBar};
+use super::components::{ChatView, LoadingScreen, LoadingState, StatusBar};
 use crate::app::App;
 
 /// Render the application UI
@@ -30,84 +30,87 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let main_vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),      // Content area (chat + side pane + input)
+            Constraint::Min(1),      // Content area (chat + input)
             Constraint::Length(1),   // Status bar (footer)
         ])
         .split(frame.area());
 
-    // Content area: horizontal split for left (chat+input) and right (side pane)
-    let content_horizontal = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(40),        // Left: chat + input
-            Constraint::Length(28),     // Right: side pane
-        ])
-        .split(main_vertical[0]);
-
-    // Left side: chat and input
-    let left_chunks = Layout::default()
+    // Content area: chat view and input box
+    let content_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),      // Chat area
             Constraint::Length(5),   // Input box
         ])
-        .split(content_horizontal[0]);
+        .split(main_vertical[0]);
 
     // Calculate view height (chat area minus borders)
-    let view_height = left_chunks[0].height.saturating_sub(2);
+    let view_height = content_chunks[0].height.saturating_sub(2);
+    let chat_width = content_chunks[0].width;
 
-    // Create chat view and get content height (accounting for text wrapping)
-    let mut chat = ChatView::new(
+    // Check if chat cache needs updating
+    let is_generating = app.state.is_generating();
+    let is_loading = app.state.is_loading();
+    let needs_update = app.chat_cache.needs_update(
         &app.messages,
         &app.current_response,
-        app.scroll_offset,
-        app.state.is_generating(),
-        app.state.is_loading(),
         app.tick,
-        &app.welcome_message,
+        chat_width,
+        is_generating,
+        is_loading,
     );
-    let content_height = chat.content_height(left_chunks[0].width);
+
+    if needs_update {
+        // Format messages and update cache
+        let mut chat = ChatView::new(
+            &app.messages,
+            &app.current_response,
+            app.scroll_offset,
+            is_generating,
+            is_loading,
+            app.tick,
+            &app.welcome_message,
+        ).with_width(chat_width);
+
+        app.chat_cache.lines = chat.format_messages();
+        app.chat_cache.update_metadata(
+            &app.messages,
+            &app.current_response,
+            app.tick,
+            chat_width,
+            is_generating,
+            is_loading,
+        );
+    }
+
+    // Calculate content height from cached lines
+    let content_height = ChatView::content_height_from_lines(&app.chat_cache.lines, chat_width);
 
     // Update app dimensions for auto-scroll
     app.update_dimensions(content_height, view_height);
 
-    // Render chat view with updated scroll offset
+    // Store chat area for mouse coordinate translation
+    app.set_chat_area(content_chunks[0]);
+
+    // Render chat view with cached lines and selection
     let chat = ChatView::new(
         &app.messages,
         &app.current_response,
         app.scroll_offset,
-        app.state.is_generating(),
-        app.state.is_loading(),
+        is_generating,
+        is_loading,
         app.tick,
         &app.welcome_message,
-    );
-    frame.render_widget(chat, left_chunks[0]);
+    )
+    .with_cached_lines(&app.chat_cache.lines)
+    .with_selection(app.selection.as_ref());
+
+    frame.render_widget(chat, content_chunks[0]);
 
     // Render input box
-    app.input_box.render(left_chunks[1], frame);
+    app.input_box.render(content_chunks[1], frame);
 
-    // Render side pane (context, tools, todos)
-    let side_pane = SidePane::new(
-        &app.context_info,
-        &app.tool_names,
-        app.active_tool.as_deref(),
-        &app.todo_list,
-    );
-    frame.render_widget(side_pane, content_horizontal[1]);
-
-    // Render status bar (spans full width, includes directory/git info)
+    // Render status bar (spans full width)
     let status = StatusBar::new(&app.state, app.tick);
     frame.render_widget(status, main_vertical[1]);
-
-    // Render permission prompt overlay if needed
-    if let Some(ref pending) = app.pending_permission {
-        if app.state.is_awaiting_permission() {
-            let prompt = PermissionPrompt::new(
-                &pending.tool_name,
-                &pending.tool_params,
-                &pending.permission_key,
-            ).with_selected(app.permission_selection);
-            frame.render_widget(prompt, frame.area());
-        }
-    }
 }

@@ -16,6 +16,7 @@ const SERVER_PORT: u16 = 8080;
 const SERVER_HOST: &str = "127.0.0.1";
 
 /// llama-server HTTP backend
+#[allow(dead_code)]
 pub struct LlamaServerBackend {
     /// Server process - only Some if we spawned it
     server_process: Option<Child>,
@@ -70,13 +71,31 @@ impl LlamaServerBackend {
     }
 
     fn to_api_messages(messages: &[ChatMessage]) -> Vec<ApiMessage> {
-        messages
-            .iter()
-            .map(|m| ApiMessage {
-                role: Self::role_to_string(&m.role),
-                content: m.content.clone(),
-            })
-            .collect()
+        // Convert messages and consolidate consecutive same-role messages
+        // This prevents "roles must alternate" errors from llama-server
+        let mut api_messages: Vec<ApiMessage> = Vec::new();
+
+        for msg in messages {
+            let role = Self::role_to_string(&msg.role);
+
+            // Check if we should merge with the previous message
+            if let Some(last) = api_messages.last_mut() {
+                if last.role == role {
+                    // Consolidate: append content to previous message
+                    last.content.push_str("\n\n");
+                    last.content.push_str(&msg.content);
+                    continue;
+                }
+            }
+
+            // Add as new message
+            api_messages.push(ApiMessage {
+                role,
+                content: msg.content.clone(),
+            });
+        }
+
+        api_messages
     }
 
     /// Wait for server to be ready
@@ -297,13 +316,30 @@ impl ModelBackend for LlamaServerBackend {
             top_p: Some(config.top_p),
         };
 
+        // Log request info for debugging context overflow
+        let msg_count = messages.len();
+        let total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
+        let estimated_tokens = total_chars / 4;
+        tracing::info!(
+            "Sending request: {} messages, ~{} chars, ~{} tokens",
+            msg_count, total_chars, estimated_tokens
+        );
+
         tokio::spawn(async move {
             match client.post(&url).json(&request).send().await {
                 Ok(response) => {
                     if !response.status().is_success() {
+                        let status = response.status();
+                        // Try to get error body for more details
+                        let error_body = response.text().await.unwrap_or_default();
+                        tracing::error!(
+                            "llama-server error {}: {}",
+                            status,
+                            if error_body.len() > 200 { &error_body[..200] } else { &error_body }
+                        );
                         let _ = tx.send(StreamEvent::Error(format!(
                             "Server error: {}",
-                            response.status()
+                            status
                         )));
                         return;
                     }
