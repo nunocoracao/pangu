@@ -1,11 +1,13 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
-    widgets::{Block, Borders},
+    style::Style,
+    widgets::{Block, BorderType, Borders},
     Frame,
 };
 use tui_textarea::TextArea;
+
+use crate::tui::theme;
 
 /// Input widget for user messages
 pub struct InputBox {
@@ -22,11 +24,14 @@ impl InputBox {
     pub fn new() -> Self {
         let mut textarea = TextArea::default();
         textarea.set_cursor_line_style(Style::default());
+        textarea.set_placeholder_text("Type a message... (Enter to send, Alt+Enter for newline)");
+        textarea.set_placeholder_style(Style::default().fg(theme::MUTED));
         textarea.set_block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title(" Message (Enter to send, Alt+Enter for newline) "),
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme::MUTED))
+                .title(" Message "),
         );
         Self { textarea }
     }
@@ -61,11 +66,14 @@ impl InputBox {
                 // Clear the textarea
                 self.textarea = TextArea::default();
                 self.textarea.set_cursor_line_style(Style::default());
+                self.textarea.set_placeholder_text("Type a message... (Enter to send, Alt+Enter for newline)");
+                self.textarea.set_placeholder_style(Style::default().fg(theme::MUTED));
                 self.textarea.set_block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::DarkGray))
-                        .title(" Message (Enter to send, Alt+Enter for newline) "),
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(theme::MUTED))
+                        .title(" Message "),
                 );
                 Some(text)
             }
@@ -88,11 +96,14 @@ impl InputBox {
         // Clear and set new text
         self.textarea = TextArea::from(text.lines().collect::<Vec<_>>());
         self.textarea.set_cursor_line_style(Style::default());
+        self.textarea.set_placeholder_text("Type a message... (Enter to send, Alt+Enter for newline)");
+        self.textarea.set_placeholder_style(Style::default().fg(theme::MUTED));
         self.textarea.set_block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title(" Message (Enter to send, Alt+Enter for newline) "),
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme::MUTED))
+                .title(" Message "),
         );
     }
 

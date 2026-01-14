@@ -74,3 +74,56 @@ Key UX components:
 - ratatui + crossterm for TUI
 - tokio + reqwest for async HTTP
 - Devstral Small 2 (24B Q4) as default model
+
+## Agent Architecture (Phase 2)
+
+### Tool System
+
+- **Sandboxed execution** - All writes confined to working directory
+- **Permission system** - Per-tool, per-path permissions with inline prompts
+- **Tool format** - Multiple XML formats for reliability with local models:
+  - Inline: `<tool_call> tool_name arg1 arg2 </tool_call>`
+  - Nested: `<tool_call><name>tool</name><path>arg</path></tool_call>`
+  - JSON fallback: `{"tool": "name", "params": {...}}`
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read file contents (50KB max) |
+| `list_files` | List directory contents |
+
+### Key Tool Files
+
+| File | Purpose |
+|------|---------|
+| `src/tools/mod.rs` | Tool trait and registry |
+| `src/tools/parser.rs` | XML/JSON tool call parser |
+| `src/tools/permission.rs` | Permission manager |
+| `src/tools/fs/read.rs` | Filesystem read tool |
+| `src/tools/fs/list.rs` | Directory listing tool |
+
+### Permission Flow
+
+1. Tool call detected in model response
+2. Check if path is within project root
+   - Within project: Execute immediately (no prompt)
+   - Outside project: Show inline permission prompt
+3. User responds with:
+   - `1` or `Enter`: Allow once
+   - `2`: Always allow (stored in `.pangu/permissions.json`)
+   - `3` or `Esc`: Deny
+
+### Storage Locations
+
+- `~/.pangu/logs/` - Application logs (not in project directory)
+- `.pangu/permissions.json` - Per-project tool permissions
+- `~/.pangu/history/` - RAG conversation history
+
+### Adding New Tools
+
+1. Create tool struct implementing `Tool` trait in `src/tools/fs/`
+2. Export from `src/tools/fs/mod.rs`
+3. Register in `ToolRegistry::new()` in `src/tools/mod.rs`
+4. Add documentation to `config/system_prompt.txt`
+5. Handle permission level (None for safe reads within project, Required for writes/external)

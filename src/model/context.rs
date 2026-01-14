@@ -118,7 +118,9 @@ mod tests {
         ];
 
         // Very small budget - should keep system + most recent
-        let result = truncate_to_context(&messages, 200, 50);
+        // Budget: 80 - 30 = 50 available, * 0.85 = ~42 tokens
+        // System (~15 tokens) leaves ~27 for others, which is about 1-2 messages
+        let result = truncate_to_context(&messages, 80, 30);
 
         assert!(result.iter().any(|m| matches!(m.role, Role::System)));
         assert!(result.len() < messages.len());

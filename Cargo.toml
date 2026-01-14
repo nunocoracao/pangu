@@ -7,8 +7,8 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-# HTTP Client for llama-server backend
-reqwest = { version = "0.12", features = ["json", "stream"] }
+# HTTP Client for llama-server backend and web tools
+reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
 tokio-stream = "0.1"
 
 # TUI Framework
@@ -43,6 +43,8 @@ dirs = "5"
 async-trait = "0.1"
 url = "2"
 urlencoding = "2"
+regex = "1"
+walkdir = "2"
 
 # Clipboard
 arboard = "3"

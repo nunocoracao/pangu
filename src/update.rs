@@ -34,21 +34,44 @@ pub fn handle_event(app: &mut App, event: Event) -> Action {
                 // Arrow key scrolling when generating (since input is blocked)
                 KeyCode::Up if matches!(app.state, AppState::Generating) => Action::ScrollUp(1),
                 KeyCode::Down if matches!(app.state, AppState::Generating) => Action::ScrollDown(1),
-                // Escape: cancel generation or clear selection
+                // Escape: cancel generation, deny permission, or clear selection
                 KeyCode::Esc => {
                     if matches!(app.state, AppState::Generating) {
                         Action::CancelGeneration
+                    } else if matches!(app.state, AppState::AwaitingPermission(_)) {
+                        Action::HandlePermissionResponse { granted: false, always: false }
                     } else if app.has_selection() {
                         Action::ClearSelection
                     } else {
                         Action::None
                     }
                 }
+                // Permission responses when awaiting permission
+                KeyCode::Char('1') if matches!(app.state, AppState::AwaitingPermission(_)) => {
+                    Action::HandlePermissionResponse { granted: true, always: false }
+                }
+                KeyCode::Char('2') if matches!(app.state, AppState::AwaitingPermission(_)) => {
+                    Action::HandlePermissionResponse { granted: true, always: true }
+                }
+                KeyCode::Char('3') if matches!(app.state, AppState::AwaitingPermission(_)) => {
+                    Action::HandlePermissionResponse { granted: false, always: false }
+                }
+                KeyCode::Enter if matches!(app.state, AppState::AwaitingPermission(_)) => {
+                    // Enter defaults to Allow Once
+                    Action::HandlePermissionResponse { granted: true, always: false }
+                }
                 // Block other input while generating (model is busy)
                 _ if matches!(app.state, AppState::Generating) => Action::None,
+                // Block input while awaiting permission
+                _ if matches!(app.state, AppState::AwaitingPermission(_)) => Action::None,
                 // Forward to input box
                 _ => {
                     if let Some(text) = app.input_box.handle_input(key) {
+                        // Check for special commands
+                        let trimmed = text.trim();
+                        if trimmed == "/clear" || trimmed == "/new" {
+                            return Action::ClearSession;
+                        }
                         // Only allow submission if model is ready
                         if app.model_ready {
                             Action::SubmitMessage(text)
@@ -156,6 +179,42 @@ pub fn apply_action(app: &mut App, action: Action) {
         }
         Action::AddInputTokens(count) => {
             app.add_input_tokens(count);
+        }
+        Action::ProcessToolCall { name, params, raw: _ } => {
+            // This is handled in main.rs event loop for now
+            // The event loop will check permissions and execute
+            tracing::info!("Processing tool call: {} with params: {:?}", name, params);
+        }
+        Action::ShowPermissionPrompt { tool_name, path, is_write } => {
+            let pending = crate::app::PendingToolCall {
+                name: tool_name,
+                params: std::collections::HashMap::new(),
+                path,
+                is_write,
+            };
+            app.set_awaiting_permission(pending);
+        }
+        Action::HandlePermissionResponse { granted, always } => {
+            // Handled in main.rs - this just logs for now
+            tracing::info!("Permission response: granted={}, always={}", granted, always);
+            app.set_idle();
+        }
+        Action::ExecuteTool { name, params: _ } => {
+            app.set_executing_tool(&name);
+        }
+        Action::AppendToolResult { tool_name, result, success } => {
+            app.add_tool_result(&tool_name, &result, success);
+            app.set_idle();
+        }
+        Action::ClearSession => {
+            // Clear messages and reset state
+            app.messages.clear();
+            app.total_input_tokens = 0;
+            app.total_output_tokens = 0;
+            app.scroll_offset = 0;
+            app.current_response.clear();
+            app.set_idle();
+            tracing::info!("Session cleared by user");
         }
         Action::None => {}
     }

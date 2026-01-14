@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 /// Actions that can be performed on the application state
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -32,6 +34,36 @@ pub enum Action {
     ClearSelection,
     /// Add input tokens to session total
     AddInputTokens(usize),
+    /// Process a detected tool call
+    ProcessToolCall {
+        name: String,
+        params: HashMap<String, String>,
+        raw: String,
+    },
+    /// Show permission prompt to user
+    ShowPermissionPrompt {
+        tool_name: String,
+        path: String,
+        is_write: bool,
+    },
+    /// Handle user's permission decision
+    HandlePermissionResponse {
+        granted: bool,
+        always: bool, // true if "always allow" was selected
+    },
+    /// Execute a tool (after permission granted)
+    ExecuteTool {
+        name: String,
+        params: HashMap<String, String>,
+    },
+    /// Append tool result to conversation
+    AppendToolResult {
+        tool_name: String,
+        result: String,
+        success: bool,
+    },
+    /// Clear the current session/conversation
+    ClearSession,
     /// No-op (for unhandled events)
     None,
 }

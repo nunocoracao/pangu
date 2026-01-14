@@ -4,6 +4,8 @@ mod config;
 mod embedded;
 mod model;
 mod rag;
+mod session;
+mod tools;
 mod tui;
 mod update;
 
@@ -79,8 +81,18 @@ async fn main() -> Result<()> {
     // Initialize error handling
     color_eyre::install()?;
 
-    // Initialize logging to file (stderr would corrupt TUI)
-    let log_file = std::fs::File::create("pangu.log").ok();
+    // Initialize logging to file in ~/.pangu/logs/ (stderr would corrupt TUI)
+    let log_dir = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".pangu")
+        .join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("pangu.log");
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .ok();
     if let Some(file) = log_file {
         tracing_subscriber::registry()
             .with(
@@ -146,6 +158,22 @@ async fn main() -> Result<()> {
 
     // Set system prompt
     app.set_system_prompt(resources.system_prompt());
+
+    // Initialize session manager and load previous session
+    let project_root = std::env::current_dir().unwrap_or_default();
+    let session_manager = session::SessionManager::new(&project_root);
+    let loaded_session = session_manager.load();
+
+    // Restore messages from previous session (excluding system messages)
+    if !loaded_session.messages.is_empty() {
+        app.messages = loaded_session.messages;
+        app.total_input_tokens = loaded_session.total_input_tokens;
+        app.total_output_tokens = loaded_session.total_output_tokens;
+        tracing::info!(
+            "Restored session with {} messages",
+            app.messages.len()
+        );
+    }
 
     // Initialize RAG system (stores in ~/.pangu/history/)
     let conversation_store = Arc::new(
@@ -333,17 +361,294 @@ async fn main() -> Result<()> {
                     // Track if this is a FinishStreaming action (to store assistant message)
                     let is_finish_streaming = matches!(action, action::Action::FinishStreaming);
 
+                    // Handle permission response - execute tool if granted
+                    if let action::Action::HandlePermissionResponse { granted, always } = &action {
+                        if let app::AppState::AwaitingPermission(ref pending) = app.state {
+                            let pending_clone = pending.clone();
+
+                            if *granted {
+                                // Execute the pending tool
+                                let tool_context = tools::ToolContext::new(
+                                    std::env::current_dir().unwrap_or_default(),
+                                    "default".to_string(),
+                                );
+                                let tool_registry = tools::ToolRegistry::new();
+
+                                if let Some(tool) = tool_registry.get(&pending_clone.name) {
+                                    // Build params from pending
+                                    let mut params = tools::ToolParams::new();
+                                    for (k, v) in &pending_clone.params {
+                                        params.insert(k.clone(), v.clone());
+                                    }
+
+                                    match tool.execute(&params, &tool_context) {
+                                        Ok(result) => {
+                                            // Update the permission message to show result
+                                            if let Some(last_msg) = app.messages.last_mut() {
+                                                if last_msg.content.contains("[Permission Required]") {
+                                                    *last_msg = model::ChatMessage::tool_result(
+                                                        &pending_clone.name,
+                                                        &result.output,
+                                                    );
+                                                }
+                                            }
+                                            tracing::info!("Tool {} executed after permission", pending_clone.name);
+
+                                            // Store permission if "always"
+                                            if *always {
+                                                tracing::info!("Storing 'always allow' for {}", pending_clone.path);
+                                                // TODO: Store in permission manager
+                                            }
+                                        }
+                                        Err(e) => {
+                                            if let Some(last_msg) = app.messages.last_mut() {
+                                                if last_msg.content.contains("[Permission Required]") {
+                                                    *last_msg = model::ChatMessage::tool_result(
+                                                        &pending_clone.name,
+                                                        format!("Error: {}", e),
+                                                    );
+                                                }
+                                            }
+                                            tracing::error!("Tool {} failed: {}", pending_clone.name, e);
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Permission denied - update message
+                                if let Some(last_msg) = app.messages.last_mut() {
+                                    if last_msg.content.contains("[Permission Required]") {
+                                        *last_msg = model::ChatMessage::tool_result(
+                                            &pending_clone.name,
+                                            "Permission denied by user",
+                                        );
+                                    }
+                                }
+                                tracing::info!("Permission denied for tool {}", pending_clone.name);
+                            }
+
+                            // Save session after permission decision
+                            if let Err(e) = session_manager.save_messages(
+                                &app.messages,
+                                app.total_input_tokens,
+                                app.total_output_tokens,
+                            ) {
+                                tracing::warn!("Failed to save session after permission: {}", e);
+                            }
+                        }
+                    }
+
+                    // Handle clear session command
+                    let is_clear_session = matches!(action, action::Action::ClearSession);
+
                     // Apply the action
                     apply_action(&mut app, action);
 
+                    // Clear session file after /clear command
+                    if is_clear_session {
+                        if let Err(e) = session_manager.clear() {
+                            tracing::warn!("Failed to clear session file: {}", e);
+                        } else {
+                            tracing::info!("Session file cleared");
+                        }
+                        // Skip the rest of generation logic
+                        continue;
+                    }
+
                     // Store assistant message to RAG after finishing
                     if is_finish_streaming {
-                        if let Some(assistant_msg) = app.messages.last() {
-                            if assistant_msg.role == model::Role::Assistant {
+                        // Get assistant message content and store to RAG
+                        let assistant_content = app.messages.last()
+                            .filter(|m| m.role == model::Role::Assistant)
+                            .map(|m| m.content.clone());
+
+                        if let Some(ref content) = assistant_content {
+                            if let Some(assistant_msg) = app.messages.last() {
                                 let _ = conversation_store.store(assistant_msg);
-                                // Update context usage
-                                app.update_context_usage(0);
                             }
+                            // Update context usage
+                            app.update_context_usage(0);
+
+                            // Parse for tool calls in the assistant's response
+                            let (clean_content, tool_calls) = tools::parser::ToolCallParser::parse(content);
+
+                            if !tool_calls.is_empty() {
+                                tracing::info!("Detected {} tool call(s)", tool_calls.len());
+
+                                // Update the assistant message - remove raw tool XML
+                                // If clean_content is empty, remove the message entirely
+                                if clean_content.trim().is_empty() {
+                                    app.messages.pop(); // Remove the tool-call-only message
+                                } else if let Some(last_msg) = app.messages.last_mut() {
+                                    last_msg.content = clean_content;
+                                }
+
+                                // Track if we need to trigger follow-up generation
+                                let mut should_continue_generation = false;
+
+                                // Process tool calls
+                                let tool_context = tools::ToolContext::new(
+                                    std::env::current_dir().unwrap_or_default(),
+                                    "default".to_string(),
+                                );
+
+                                for tool_call in tool_calls {
+                                    let tool_name = &tool_call.name;
+                                    let tool_registry = tools::ToolRegistry::new();
+
+                                    if let Some(tool) = tool_registry.get(tool_name) {
+                                        // Get path for permission check
+                                        let path_str = tool_call.params.get("path").unwrap_or(".");
+                                        let resolved_path = tool_context.resolve_path(path_str).ok();
+
+                                        let perm_level = tool.permission_level(
+                                            resolved_path.as_deref(),
+                                            &tool_context,
+                                        );
+
+                                        if perm_level == tools::PermissionLevel::None {
+                                            // Execute immediately - no permission needed
+                                            match tool.execute(&tool_call.params, &tool_context) {
+                                                Ok(result) => {
+                                                    // Add tool result as a message
+                                                    let result_msg = model::ChatMessage::tool_result(
+                                                        tool_name,
+                                                        &result.output,
+                                                    );
+                                                    app.messages.push(result_msg);
+                                                    should_continue_generation = true;
+                                                    tracing::info!("Tool {} executed successfully", tool_name);
+                                                }
+                                                Err(e) => {
+                                                    let error_msg = model::ChatMessage::tool_result(
+                                                        tool_name,
+                                                        format!("Error: {}", e),
+                                                    );
+                                                    app.messages.push(error_msg);
+                                                    should_continue_generation = true;
+                                                    tracing::error!("Tool {} failed: {}", tool_name, e);
+                                                }
+                                            }
+                                        } else {
+                                            // Need permission - show inline prompt
+                                            tracing::info!(
+                                                "Tool {} needs permission for path: {}",
+                                                tool_name,
+                                                path_str
+                                            );
+                                            // Show permission request inline in chat
+                                            let perm_msg = model::ChatMessage {
+                                                role: model::Role::Tool,
+                                                content: format!(
+                                                    "[Permission Required]\nTool '{}' wants to access: {}\n\nPress 1 to Allow Once, 2 to Always Allow, 3 or Esc to Deny",
+                                                    tool_name,
+                                                    path_str
+                                                ),
+                                            };
+                                            app.messages.push(perm_msg);
+
+                                            // Store pending tool call
+                                            let pending = app::PendingToolCall {
+                                                name: tool_name.clone(),
+                                                params: tool_call.params.iter()
+                                                    .map(|(k, v)| (k.clone(), v.clone()))
+                                                    .collect(),
+                                                path: path_str.to_string(),
+                                                is_write: false, // reads for now
+                                            };
+                                            app.set_awaiting_permission(pending);
+                                        }
+                                    } else {
+                                        // Unknown tool
+                                        let error_msg = model::ChatMessage::tool_result(
+                                            tool_name,
+                                            format!("Unknown tool: {}", tool_name),
+                                        );
+                                        app.messages.push(error_msg);
+                                        should_continue_generation = true;
+                                        tracing::warn!("Unknown tool requested: {}", tool_name);
+                                    }
+                                }
+
+                                // After tool execution, trigger follow-up generation
+                                // so the model can respond to the tool results
+                                if should_continue_generation {
+                                    tracing::info!("Triggering follow-up generation after tool execution");
+                                    app.start_generating();
+
+                                    // Get query for RAG (use original user message)
+                                    let query = app.messages.iter()
+                                        .rev()
+                                        .find(|m| m.role == model::Role::User)
+                                        .map(|m| m.content.clone())
+                                        .unwrap_or_default();
+
+                                    // Build context with tool results
+                                    let history_guard = rag_history.read().unwrap();
+                                    let system_prompt = resources.system_prompt();
+                                    let (context_messages, rag_count) = retriever.build_context(
+                                        &query,
+                                        &history_guard,
+                                        &app.messages,
+                                        Some(system_prompt),
+                                        SETTINGS.rag.max_rag_messages,
+                                        SETTINGS.rag.max_recent_messages,
+                                    );
+                                    drop(history_guard);
+
+                                    let truncated_context = truncate_to_context(
+                                        &context_messages,
+                                        context_size as usize,
+                                        inference_config.max_tokens as usize,
+                                    );
+
+                                    app.update_context_usage_from_context(&truncated_context, rag_count);
+
+                                    let config = inference_config.clone();
+                                    let model_arc = model.clone();
+                                    let event_tx_gen = event_tx.clone();
+
+                                    tokio::task::spawn_blocking(move || {
+                                        let mut guard = model_arc.lock().unwrap();
+                                        if let Some(ref mut backend) = *guard {
+                                            let (stream_tx, stream_rx) = mpsc::unbounded_channel::<StreamEvent>();
+
+                                            let event_tx_forward = event_tx_gen.clone();
+                                            std::thread::spawn(move || {
+                                                let rt = tokio::runtime::Builder::new_current_thread()
+                                                    .enable_all()
+                                                    .build()
+                                                    .unwrap();
+                                                rt.block_on(async {
+                                                    let mut rx = stream_rx;
+                                                    while let Some(stream_event) = rx.recv().await {
+                                                        let event = match stream_event {
+                                                            StreamEvent::Token(token) => Event::StreamToken(token),
+                                                            StreamEvent::Done => Event::StreamDone,
+                                                            StreamEvent::Error(e) => Event::StreamError(e),
+                                                        };
+                                                        if event_tx_forward.send(event).is_err() {
+                                                            break;
+                                                        }
+                                                    }
+                                                });
+                                            });
+
+                                            if let Err(e) = backend.generate_stream(&truncated_context, &config, stream_tx) {
+                                                let _ = event_tx_gen.send(Event::StreamError(e.to_string()));
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        }
+
+                        // Save session after assistant response (even if no tool calls)
+                        if let Err(e) = session_manager.save_messages(
+                            &app.messages,
+                            app.total_input_tokens,
+                            app.total_output_tokens,
+                        ) {
+                            tracing::warn!("Failed to save session: {}", e);
                         }
                     }
 
@@ -387,6 +692,15 @@ async fn main() -> Result<()> {
                         // Store the user message in RAG
                         if let Some(user_msg) = app.messages.iter().rev().find(|m| m.role == model::Role::User) {
                             let _ = conversation_store.store(user_msg);
+                        }
+
+                        // Save session after user message (in case generation fails)
+                        if let Err(e) = session_manager.save_messages(
+                            &app.messages,
+                            app.total_input_tokens,
+                            app.total_output_tokens,
+                        ) {
+                            tracing::warn!("Failed to save session after user message: {}", e);
                         }
 
                         let config = inference_config.clone();
@@ -435,6 +749,15 @@ async fn main() -> Result<()> {
                 }
             }
         }
+    }
+
+    // Save session before exit
+    if let Err(e) = session_manager.save_messages(
+        &app.messages,
+        app.total_input_tokens,
+        app.total_output_tokens,
+    ) {
+        tracing::warn!("Failed to save session on exit: {}", e);
     }
 
     // Cleanup

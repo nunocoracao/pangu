@@ -1,11 +1,4 @@
 
-    ██████╗  █████╗ ███╗   ██╗ ██████╗ ██╗   ██╗
-    ██╔══██╗██╔══██╗████╗  ██║██╔════╝ ██║   ██║
-    ██████╔╝███████║██╔██╗ ██║██║  ███╗██║   ██║
-    ██╔═══╝ ██╔══██║██║╚██╗██║██║   ██║██║   ██║
-    ██║     ██║  ██║██║ ╚████║╚██████╔╝╚██████╔╝
-    ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝  ╚═════╝
-
     Your local AI coding assistant
 
     Type a message below to start chatting.
@@ -15,4 +8,6 @@
     • Explaining complex concepts
     • Reviewing and improving code
     • Answering programming questions
+
+    Type /clear to start a new conversation.
 

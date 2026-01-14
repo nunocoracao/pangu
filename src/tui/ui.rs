@@ -3,7 +3,7 @@ use ratatui::{
     Frame,
 };
 
-use super::components::{ChatView, LoadingScreen, LoadingState, StatusBar};
+use super::components::{ChatView, Header, LoadingScreen, LoadingState, StatusBar, header_height};
 use crate::app::App;
 
 /// Render the application UI
@@ -26,14 +26,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
 
-    // Main vertical layout: content area and footer
+    // Calculate header height based on state
+    let h_height = header_height(&app.state);
+
+    // Main vertical layout: header, content area, and footer
     let main_vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),      // Content area (chat + input)
-            Constraint::Length(1),   // Status bar (footer)
+            Constraint::Length(h_height), // Header with logo
+            Constraint::Min(1),           // Content area (chat + input)
+            Constraint::Length(1),        // Status bar (footer)
         ])
         .split(frame.area());
+
+    // Render the animated header
+    let header = Header::new(&app.state, app.tick);
+    frame.render_widget(header, main_vertical[0]);
 
     // Content area: chat view and input box
     let content_chunks = Layout::default()
@@ -42,7 +50,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Constraint::Min(1),      // Chat area
             Constraint::Length(5),   // Input box
         ])
-        .split(main_vertical[0]);
+        .split(main_vertical[1]);
 
     // Calculate view height (chat area minus borders)
     let view_height = content_chunks[0].height.saturating_sub(2);
@@ -112,5 +120,5 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Render status bar (spans full width)
     let status = StatusBar::new(&app.state, app.tick);
-    frame.render_widget(status, main_vertical[1]);
+    frame.render_widget(status, main_vertical[2]);
 }

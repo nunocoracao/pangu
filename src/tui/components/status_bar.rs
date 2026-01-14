@@ -12,6 +12,7 @@ use ratatui::{
 };
 
 use crate::app::AppState;
+use crate::tui::theme;
 
 /// Spinner frames for loading animation
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -211,40 +212,45 @@ impl Widget for StatusBar<'_> {
         let spinner_frame = SPINNER[(self.tick as usize / 2) % SPINNER.len()];
 
         let (status_text, status_style) = match self.state {
-            AppState::Idle => ("Ready".to_string(), Style::default().fg(Color::Green)),
+            AppState::Idle => ("Ready".to_string(), Style::default().fg(theme::SUCCESS)),
             AppState::Generating => (
-                format!("{} Generating... (Esc to cancel)", spinner_frame),
+                format!("{} Generating...", spinner_frame),
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme::WARNING)
                     .add_modifier(Modifier::BOLD),
             ),
             AppState::Downloading => (
                 format!("{} Downloading model...", spinner_frame),
                 Style::default()
-                    .fg(Color::Magenta)
+                    .fg(theme::INFO)
                     .add_modifier(Modifier::BOLD),
             ),
             AppState::Loading => (
                 format!("{} Loading model...", spinner_frame),
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme::PRIMARY)
                     .add_modifier(Modifier::BOLD),
             ),
             AppState::Error(msg) => (
                 msg.clone(),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme::ERROR),
+            ),
+            AppState::AwaitingPermission(_) => (
+                "Awaiting permission...".to_string(),
+                Style::default()
+                    .fg(theme::WARNING)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            AppState::ExecutingTool(ref name) => (
+                format!("{} Executing {}...", spinner_frame, name),
+                Style::default()
+                    .fg(theme::INFO)
+                    .add_modifier(Modifier::BOLD),
             ),
         };
 
-        // Left side: Pangu status
+        // Left side: status (no more Pangu badge - it's in the header now)
         let left_spans = vec![
-            Span::styled(
-                " Pangu ",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
             Span::raw(" "),
             Span::styled(status_text, status_style),
         ];
@@ -260,35 +266,54 @@ impl Widget for StatusBar<'_> {
             // Origin URL badge
             if let Some(url) = &info.origin_url {
                 right_spans.push(Span::styled(
-                    format!(" {} ", url),
+                    format!("  {} ", url),
                     Style::default()
                         .fg(Color::White)
-                        .bg(Color::Rgb(60, 60, 60)),
+                        .bg(theme::BG_BADGE),
                 ));
                 right_spans.push(Span::raw(" "));
             }
 
-            // Branch badge
-            let mut branch_text = format!(" {} ", info.branch);
-            if !info.status.is_empty() {
-                branch_text = format!(" {} {} ", info.branch, info.status);
-            }
+            // Branch badge with icon
             right_spans.push(Span::styled(
-                branch_text,
+                format!("  {} ", info.branch),
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Magenta)
+                    .fg(Color::White)
+                    .bg(theme::BRANCH_BG)
                     .add_modifier(Modifier::BOLD),
             ));
-            right_spans.push(Span::raw(" "));
+
+            // Git status (color-coded, separate from branch badge)
+            if !info.status.is_empty() {
+                right_spans.push(Span::raw(" "));
+                // Parse and color-code the status
+                for part in info.status.split_whitespace() {
+                    let (text, color) = if part.starts_with('+') {
+                        (part, theme::GIT_STAGED)
+                    } else if part.starts_with('~') {
+                        (part, theme::GIT_MODIFIED)
+                    } else if part.starts_with('?') {
+                        (part, theme::GIT_UNTRACKED)
+                    } else {
+                        (part, theme::MUTED)
+                    };
+                    right_spans.push(Span::styled(
+                        text.to_string(),
+                        Style::default().fg(color),
+                    ));
+                    right_spans.push(Span::raw(" "));
+                }
+            } else {
+                right_spans.push(Span::raw(" "));
+            }
         }
 
-        // Path badge
+        // Path badge with icon
         right_spans.push(Span::styled(
-            format!(" {} ", working_dir),
+            format!("  {} ", working_dir),
             Style::default()
                 .fg(Color::Black)
-                .bg(Color::Yellow),
+                .bg(theme::WARNING),
         ));
 
         // Calculate widths

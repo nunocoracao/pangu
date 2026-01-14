@@ -10,6 +10,8 @@ use syntect::{
     util::LinesWithEndings,
 };
 
+use super::theme;
+
 /// Markdown renderer that converts markdown text to ratatui Lines
 pub struct MarkdownRenderer {
     syntax_set: SyntaxSet,
@@ -71,10 +73,10 @@ impl MarkdownRenderer {
                     Tag::Heading { level, .. } => {
                         let style = match level {
                             HeadingLevel::H1 => Style::default()
-                                .fg(Color::Cyan)
+                                .fg(theme::PRIMARY)
                                 .add_modifier(Modifier::BOLD),
                             HeadingLevel::H2 => Style::default()
-                                .fg(Color::Blue)
+                                .fg(theme::INFO)
                                 .add_modifier(Modifier::BOLD),
                             _ => Style::default()
                                 .fg(Color::White)
@@ -126,7 +128,7 @@ impl MarkdownRenderer {
                         let current = *style_stack.last().unwrap_or(&Style::default());
                         style_stack.push(
                             current
-                                .fg(Color::Blue)
+                                .fg(theme::INFO)
                                 .add_modifier(Modifier::UNDERLINED),
                         );
                     }
@@ -152,7 +154,7 @@ impl MarkdownRenderer {
                     TagEnd::Paragraph => {
                         if !current_spans.is_empty() {
                             let prefix = if in_blockquote {
-                                vec![Span::styled("│ ", Style::default().fg(Color::DarkGray))]
+                                vec![Span::styled("│ ", Style::default().fg(theme::MUTED))]
                             } else {
                                 vec![]
                             };
@@ -205,7 +207,7 @@ impl MarkdownRenderer {
                             };
 
                             let mut item_spans =
-                                vec![Span::styled(bullet, Style::default().fg(Color::DarkGray))];
+                                vec![Span::styled(bullet, Style::default().fg(theme::MUTED))];
                             item_spans.append(&mut current_spans);
                             lines.push(Line::from(item_spans));
                         }
@@ -219,7 +221,7 @@ impl MarkdownRenderer {
                         if let Some(url) = link_url.take() {
                             current_spans.push(Span::styled(
                                 format!(" ({})", url),
-                                Style::default().fg(Color::DarkGray),
+                                Style::default().fg(theme::MUTED),
                             ));
                         }
                     }
@@ -263,14 +265,14 @@ impl MarkdownRenderer {
 
                 Event::Code(code) => {
                     let code_style = Style::default()
-                        .fg(Color::Yellow)
-                        .bg(Color::Rgb(40, 40, 40));
+                        .fg(theme::WARNING)
+                        .bg(theme::BG_BADGE);
                     current_spans.push(Span::styled(format!(" {} ", code), code_style));
                 }
 
                 Event::Html(html) => {
                     // Render HTML as plain text
-                    let style = Style::default().fg(Color::DarkGray);
+                    let style = Style::default().fg(theme::MUTED);
                     current_spans.push(Span::styled(html.to_string(), style));
                 }
 
@@ -281,7 +283,7 @@ impl MarkdownRenderer {
                 Event::HardBreak => {
                     if !current_spans.is_empty() {
                         let prefix = if in_blockquote {
-                            vec![Span::styled("│ ", Style::default().fg(Color::DarkGray))]
+                            vec![Span::styled("│ ", Style::default().fg(theme::MUTED))]
                         } else {
                             vec![]
                         };
@@ -294,7 +296,7 @@ impl MarkdownRenderer {
                 Event::Rule => {
                     lines.push(Line::from(Span::styled(
                         "─".repeat(40),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme::MUTED),
                     )));
                     lines.push(Line::from(""));
                 }
@@ -303,7 +305,7 @@ impl MarkdownRenderer {
                     let marker = if checked { "[x] " } else { "[ ] " };
                     current_spans.push(Span::styled(
                         marker,
-                        Style::default().fg(Color::Magenta),
+                        Style::default().fg(theme::ACCENT),
                     ));
                 }
 
@@ -336,12 +338,12 @@ impl MarkdownRenderer {
         let header_content_len = 3 + lang_display.len() + 1; // "┌─ " + lang + " "
         let remaining_dashes = border_width.saturating_sub(header_content_len);
         lines.push(Line::from(vec![
-            Span::styled("┌─ ", Style::default().fg(Color::DarkGray)),
-            Span::styled(lang_display.to_string(), Style::default().fg(Color::Cyan)),
-            Span::styled(" ", Style::default().fg(Color::DarkGray)),
+            Span::styled("┌─ ", Style::default().fg(theme::MUTED)),
+            Span::styled(lang_display.to_string(), Style::default().fg(theme::INFO)),
+            Span::styled(" ", Style::default().fg(theme::MUTED)),
             Span::styled(
                 "─".repeat(remaining_dashes),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::MUTED),
             ),
         ]));
 
@@ -359,9 +361,9 @@ impl MarkdownRenderer {
             // Format line number with padding
             let line_num_str = format!("{:>width$}", line_num, width = line_num_width);
             let mut spans = vec![
-                Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-                Span::styled(line_num_str, Style::default().fg(Color::DarkGray)),
-                Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+                Span::styled("│ ", Style::default().fg(theme::MUTED)),
+                Span::styled(line_num_str, Style::default().fg(theme::MUTED)),
+                Span::styled(" │ ", Style::default().fg(theme::MUTED)),
             ];
 
             match highlighter.highlight_line(line, &self.syntax_set) {
@@ -389,7 +391,7 @@ impl MarkdownRenderer {
         // Add bottom border
         lines.push(Line::from(Span::styled(
             "└".to_string() + &"─".repeat(border_width.saturating_sub(1)),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::MUTED),
         )));
 
         lines
@@ -402,7 +404,7 @@ impl MarkdownRenderer {
         _alignments: &[pulldown_cmark::Alignment],
         is_header: bool,
     ) -> Line<'static> {
-        let mut spans = vec![Span::styled("│ ", Style::default().fg(Color::DarkGray))];
+        let mut spans = vec![Span::styled("│ ", Style::default().fg(theme::MUTED))];
 
         let style = if is_header {
             Style::default().add_modifier(Modifier::BOLD)
@@ -413,11 +415,11 @@ impl MarkdownRenderer {
         for (i, cell) in cells.iter().enumerate() {
             spans.push(Span::styled(cell.clone(), style));
             if i < cells.len() - 1 {
-                spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(" │ ", Style::default().fg(theme::MUTED)));
             }
         }
 
-        spans.push(Span::styled(" │", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(" │", Style::default().fg(theme::MUTED)));
 
         Line::from(spans)
     }
@@ -441,7 +443,7 @@ impl MarkdownRenderer {
 
         Line::from(Span::styled(
             separator,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::MUTED),
         ))
     }
 }

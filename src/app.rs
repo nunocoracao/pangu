@@ -100,6 +100,15 @@ impl ChatViewCache {
     }
 }
 
+/// Pending tool call awaiting permission
+#[derive(Debug, Clone)]
+pub struct PendingToolCall {
+    pub name: String,
+    pub params: std::collections::HashMap<String, String>,
+    pub path: String,
+    pub is_write: bool,
+}
+
 /// Application state enum
 #[derive(Debug, Clone)]
 pub enum AppState {
@@ -111,6 +120,10 @@ pub enum AppState {
     Downloading,
     /// Loading the model into llama-server
     Loading,
+    /// Awaiting user permission for a tool call
+    AwaitingPermission(PendingToolCall),
+    /// Executing a tool
+    ExecutingTool(String),
     /// Error state
     Error(String),
 }
@@ -281,6 +294,10 @@ pub struct App {
     pub total_input_tokens: usize,
     /// Total output tokens received this session
     pub total_output_tokens: usize,
+    /// Queue of pending tool calls to execute
+    pub pending_tool_calls: std::collections::VecDeque<crate::tools::ToolCall>,
+    /// Selected permission option (0=Allow Once, 1=Always, 2=Deny)
+    pub permission_selection: usize,
 }
 
 impl App {
@@ -310,6 +327,8 @@ impl App {
             session_start: Instant::now(),
             total_input_tokens: 0,
             total_output_tokens: 0,
+            pending_tool_calls: std::collections::VecDeque::new(),
+            permission_selection: 0,
         }
     }
 
@@ -562,5 +581,50 @@ impl App {
     /// Set the chat area bounds (called during rendering)
     pub fn set_chat_area(&mut self, area: ratatui::layout::Rect) {
         self.chat_area = Some(area);
+    }
+
+    /// Set awaiting permission state
+    pub fn set_awaiting_permission(&mut self, pending: PendingToolCall) {
+        self.permission_selection = 0; // Reset to "Allow Once"
+        self.state = AppState::AwaitingPermission(pending);
+    }
+
+    /// Set executing tool state
+    pub fn set_executing_tool(&mut self, tool_name: &str) {
+        self.state = AppState::ExecutingTool(tool_name.to_string());
+    }
+
+    /// Add a tool result message
+    pub fn add_tool_result(&mut self, tool_name: &str, result: &str, success: bool) {
+        let content = if success {
+            format!("[Tool: {}]\n{}", tool_name, result)
+        } else {
+            format!("[Tool: {} - Error]\n{}", tool_name, result)
+        };
+        self.messages.push(ChatMessage::tool_result(tool_name, content));
+    }
+
+    /// Cycle permission selection (for keyboard navigation)
+    pub fn next_permission_option(&mut self) {
+        self.permission_selection = (self.permission_selection + 1) % 3;
+    }
+
+    /// Cycle permission selection backwards
+    pub fn prev_permission_option(&mut self) {
+        self.permission_selection = if self.permission_selection == 0 {
+            2
+        } else {
+            self.permission_selection - 1
+        };
+    }
+
+    /// Check if awaiting permission
+    pub fn is_awaiting_permission(&self) -> bool {
+        matches!(self.state, AppState::AwaitingPermission(_))
+    }
+
+    /// Check if executing tool
+    pub fn is_executing_tool(&self) -> bool {
+        matches!(self.state, AppState::ExecutingTool(_))
     }
 }

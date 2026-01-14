@@ -3,12 +3,13 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget, Wrap},
+    widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap},
 };
 
 use crate::app::TextSelection;
 use crate::model::{ChatMessage, Role};
 use crate::tui::markdown::MarkdownRenderer;
+use crate::tui::theme;
 
 /// Widget for displaying chat messages
 pub struct ChatView<'a> {
@@ -121,7 +122,7 @@ impl<'a> ChatView<'a> {
         for line in self.welcome_message.lines() {
             lines.push(Line::from(Span::styled(
                 line.to_string(),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme::PRIMARY),
             )));
         }
 
@@ -130,7 +131,7 @@ impl<'a> ChatView<'a> {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "─".repeat(40),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::MUTED),
             )));
             lines.push(Line::from(""));
 
@@ -143,18 +144,18 @@ impl<'a> ChatView<'a> {
                 Span::styled(
                     format!("{} ", spinner),
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme::PRIMARY)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     "Loading model...".to_string(),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme::WARNING),
                 ),
             ]));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "Please wait while the LLM initializes.".to_string(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::MUTED),
             )));
             return lines;
         }
@@ -168,7 +169,7 @@ impl<'a> ChatView<'a> {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "─".repeat(40),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::MUTED),
             )));
             lines.push(Line::from(""));
         }
@@ -179,24 +180,24 @@ impl<'a> ChatView<'a> {
                 continue;
             }
 
-            // Add role header
+            // Add role header with icons
             let (role_text, role_style) = match msg.role {
                 Role::User => (
-                    "You",
+                    " You",
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme::USER_COLOR)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Role::Assistant => (
-                    "Pangu",
+                    " Pangu",
                     Style::default()
-                        .fg(Color::Green)
+                        .fg(theme::ACCENT)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Role::Tool => (
-                    "Tool",
+                    " Tool",
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme::WARNING)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Role::System => continue,
@@ -223,9 +224,57 @@ impl<'a> ChatView<'a> {
                     }
                 }
                 Role::Tool => {
-                    // Tool results: just show as plain text
-                    for line in msg.content.lines() {
-                        lines.push(Line::from(line.to_string()));
+                    // Tool messages with special formatting
+                    if msg.content.starts_with("[Permission Required]") {
+                        // Permission request - show with warning styling
+                        for line in msg.content.lines() {
+                            if line.contains("Press 1") || line.contains("Press 2") || line.contains("Press 3") {
+                                // Keyboard hints line
+                                lines.push(Line::from(vec![
+                                    Span::styled("1", Style::default().fg(theme::SUCCESS)),
+                                    Span::raw(" Allow Once  "),
+                                    Span::styled("2", Style::default().fg(theme::INFO)),
+                                    Span::raw(" Always Allow  "),
+                                    Span::styled("3/Esc", Style::default().fg(theme::ERROR)),
+                                    Span::raw(" Deny"),
+                                ]));
+                            } else if line.starts_with("[Permission Required]") {
+                                lines.push(Line::from(Span::styled(
+                                    line.to_string(),
+                                    Style::default().fg(theme::WARNING).add_modifier(Modifier::BOLD),
+                                )));
+                            } else if line.contains("wants to access") {
+                                lines.push(Line::from(Span::styled(
+                                    line.to_string(),
+                                    Style::default().fg(theme::PRIMARY),
+                                )));
+                            } else {
+                                lines.push(Line::from(line.to_string()));
+                            }
+                        }
+                    } else if msg.content.contains("Error:") {
+                        // Error result
+                        for line in msg.content.lines() {
+                            lines.push(Line::from(Span::styled(
+                                line.to_string(),
+                                Style::default().fg(theme::ERROR),
+                            )));
+                        }
+                    } else {
+                        // Normal tool result
+                        for line in msg.content.lines() {
+                            if line.starts_with("[Tool:") {
+                                lines.push(Line::from(Span::styled(
+                                    line.to_string(),
+                                    Style::default().fg(theme::SUCCESS),
+                                )));
+                            } else {
+                                lines.push(Line::from(Span::styled(
+                                    line.to_string(),
+                                    Style::default().fg(theme::MUTED),
+                                )));
+                            }
+                        }
                     }
                 }
                 Role::System => {}
@@ -238,9 +287,9 @@ impl<'a> ChatView<'a> {
         // Add current streaming response if any
         if !self.current_response.is_empty() || self.is_generating {
             lines.push(Line::from(vec![Span::styled(
-                "Pangu".to_string(),
+                " Pangu".to_string(),
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(theme::ACCENT)
                     .add_modifier(Modifier::BOLD),
             )]));
 
@@ -252,11 +301,11 @@ impl<'a> ChatView<'a> {
 
             // Show animated cursor while generating
             if self.is_generating {
+                let cursor_frames = ["▏", "▎", "▍", "▌"];
+                let cursor_idx = (self.tick as usize / 2) % cursor_frames.len();
                 lines.push(Line::from(vec![Span::styled(
-                    "▊".to_string(),
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::SLOW_BLINK),
+                    cursor_frames[cursor_idx].to_string(),
+                    Style::default().fg(theme::ACCENT),
                 )]));
             }
         }
@@ -289,7 +338,8 @@ impl Widget for ChatView<'_> {
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme::MUTED))
             .title(" Chat ");
 
         let paragraph = Paragraph::new(lines)
@@ -308,7 +358,7 @@ fn apply_selection_highlight(
     _scroll: u16,
 ) -> Vec<Line<'static>> {
     let ((start_row, start_col), (end_row, end_col)) = selection.normalized();
-    let highlight_style = Style::default().bg(Color::Blue).fg(Color::White);
+    let highlight_style = Style::default().bg(theme::PRIMARY).fg(Color::Black);
 
     lines
         .into_iter()

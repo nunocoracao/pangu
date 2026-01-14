@@ -43,16 +43,35 @@ pub enum Event {
     StreamError(String),
     /// Input tokens sent to model (for tracking)
     InputTokens(usize),
+    /// Tool call detected in model response
+    ToolCallDetected {
+        name: String,
+        params: std::collections::HashMap<String, String>,
+        raw: String,
+    },
+    /// Permission request - show prompt to user
+    PermissionRequest {
+        tool_name: String,
+        path: String,
+        is_write: bool,
+    },
     /// Tool execution started
     ToolExecutionStart(String),
     /// Tool execution completed with result
     ToolExecutionDone(String, String), // (tool_name, result)
     /// Tool execution failed
-    ToolExecutionError(String),
-    /// Permission granted - execute the pending tool
-    PermissionGranted(String, String), // (tool_name, tool_params)
-    /// Permission denied - add denial message to chat
-    PermissionDenied(String, String), // (tool_name, tool_params)
+    ToolExecutionError(String, String), // (tool_name, error)
+    /// Permission granted by user
+    PermissionGranted {
+        tool_name: String,
+        path: String,
+        always: bool, // true if "always allow" was selected
+    },
+    /// Permission denied by user
+    PermissionDenied {
+        tool_name: String,
+        path: String,
+    },
     /// Quit the application
     Quit,
 }
