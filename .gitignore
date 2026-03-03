@@ -35,3 +35,4 @@ Thumbs.db
 .cache/bin/
 
 .pangu/history
+.watchfire/
