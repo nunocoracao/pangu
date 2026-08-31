@@ -31,6 +31,14 @@ const LOGO: &[&str] = &[
 
 /// Progress bar width in characters
 const PROGRESS_BAR_WIDTH: usize = 40;
+/// Tick budget for a full logo color cycle (slower = calmer)
+const LOGO_COLOR_CYCLE_TICKS: u64 = 300;
+/// How often to rotate loading/download fun messages
+const MESSAGE_CYCLE_TICKS: u64 = 120;
+/// Typewriter pacing (ticks per character)
+const TYPEWRITER_TICKS_PER_CHAR: u64 = 3;
+/// Spinner animation speed divisor
+const SPINNER_TICK_DIVISOR: u64 = 4;
 
 /// Fun sentences to display during model loading (rotates every few seconds)
 const LOADING_MESSAGES: &[&str] = &[
@@ -222,8 +230,8 @@ impl<'a> LoadingScreen<'a> {
     /// Get the pulsing color for the logo based on tick
     fn logo_color(&self) -> Color {
         // Cycle through colors: Cyan -> Blue -> Magenta -> Cyan
-        // Full cycle every ~60 ticks (15 seconds at 4Hz tick rate)
-        let phase = (self.tick % 60) as f32 / 60.0;
+        // Full cycle every LOGO_COLOR_CYCLE_TICKS.
+        let phase = (self.tick % LOGO_COLOR_CYCLE_TICKS) as f32 / LOGO_COLOR_CYCLE_TICKS as f32;
 
         if phase < 0.33 {
             // Cyan to Blue
@@ -382,20 +390,20 @@ impl<'a> LoadingScreen<'a> {
 
         // Line 1: Spinner with "Loading model..."
         let ascii_spinner = ["|", "/", "-", "\\"];
-        let spinner_frame = ascii_spinner[(self.tick as usize) % ascii_spinner.len()];
+        let spinner_frame = ascii_spinner[((self.tick / SPINNER_TICK_DIVISOR) as usize) % ascii_spinner.len()];
         let loading_text = format!("{} Loading model...", spinner_frame);
         render_line(buf, y, &loading_text, bg.fg(Color::Yellow));
 
         // Line 2: Fun rotating message with typewriter effect
-        // Message changes every ~4 seconds, types out over ~1.5 seconds
-        let message_cycle = 16u64; // ticks per message (4 sec at 4Hz)
+        // Message changes every MESSAGE_CYCLE_TICKS.
+        let message_cycle = MESSAGE_CYCLE_TICKS;
         let message_idx = (self.tick / message_cycle) as usize % LOADING_MESSAGES.len();
         let fun_message = LOADING_MESSAGES[message_idx];
 
         // Calculate how many characters to show (typewriter effect)
         let ticks_into_message = self.tick % message_cycle;
-        let type_speed = 3u64; // characters per tick
-        let chars_to_show = ((ticks_into_message * type_speed) as usize).min(fun_message.len());
+        let chars_to_show = (ticks_into_message / TYPEWRITER_TICKS_PER_CHAR) as usize;
+        let chars_to_show = chars_to_show.min(fun_message.len());
 
         // Render the partial message with a cursor
         let visible_message: String = if chars_to_show < fun_message.len() {
@@ -441,15 +449,15 @@ impl<'a> LoadingScreen<'a> {
         render_line(buf, start_y, "Downloading model...", bg.fg(Color::Cyan));
 
         // Line 2: Fun rotating message with typewriter effect
-        // Message changes every ~4 seconds, types out over ~1.5 seconds
-        let message_cycle = 16u64; // ticks per message (4 sec at 4Hz)
+        // Message changes every MESSAGE_CYCLE_TICKS.
+        let message_cycle = MESSAGE_CYCLE_TICKS;
         let message_idx = (self.tick / message_cycle) as usize % DOWNLOAD_MESSAGES.len();
         let fun_message = DOWNLOAD_MESSAGES[message_idx];
 
         // Calculate how many characters to show (typewriter effect)
         let ticks_into_message = self.tick % message_cycle;
-        let type_speed = 3u64; // characters per tick
-        let chars_to_show = ((ticks_into_message * type_speed) as usize).min(fun_message.len());
+        let chars_to_show = (ticks_into_message / TYPEWRITER_TICKS_PER_CHAR) as usize;
+        let chars_to_show = chars_to_show.min(fun_message.len());
 
         // Render the partial message with a cursor
         let visible_message: String = if chars_to_show < fun_message.len() {

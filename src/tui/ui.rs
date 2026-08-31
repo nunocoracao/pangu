@@ -3,7 +3,7 @@ use ratatui::{
     Frame,
 };
 
-use super::components::{ChatView, Header, LoadingScreen, LoadingState, StatusBar, header_height};
+use super::components::{ActivityPanel, ChatView, Header, LoadingScreen, LoadingState, StatusBar, header_height};
 use crate::app::App;
 
 /// Render the application UI
@@ -43,14 +43,27 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let header = Header::new(&app.state, app.tick);
     frame.render_widget(header, main_vertical[0]);
 
-    // Content area: chat view and input box
+    // Content area: main chat + optional activity panel
+    let columns = if main_vertical[1].width >= 110 {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(70), Constraint::Length(34)])
+            .split(main_vertical[1])
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(1), Constraint::Length(0)])
+            .split(main_vertical[1])
+    };
+
+    // Left content: chat view and input box
     let content_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),      // Chat area
-            Constraint::Length(5),   // Input box
+            Constraint::Length(7),   // Input box
         ])
-        .split(main_vertical[1]);
+        .split(columns[0]);
 
     // Calculate view height (chat area minus borders)
     let view_height = content_chunks[0].height.saturating_sub(2);
@@ -117,6 +130,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Render input box
     app.input_box.render(content_chunks[1], frame);
+
+    // Render right-side activity panel when there is room
+    if columns[1].width > 0 {
+        let panel = ActivityPanel::new(app);
+        frame.render_widget(panel, columns[1]);
+    }
 
     // Render status bar (spans full width)
     let status = StatusBar::new(&app.state, app.tick);

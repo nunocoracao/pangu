@@ -122,7 +122,7 @@ impl<'a> ChatView<'a> {
         for line in self.welcome_message.lines() {
             lines.push(Line::from(Span::styled(
                 line.to_string(),
-                Style::default().fg(theme::PRIMARY),
+                Style::default().fg(theme::MUTED),
             )));
         }
 
@@ -183,19 +183,19 @@ impl<'a> ChatView<'a> {
             // Add role header with icons
             let (role_text, role_style) = match msg.role {
                 Role::User => (
-                    " You",
+                    " USER ",
                     Style::default()
                         .fg(theme::USER_COLOR)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Role::Assistant => (
-                    " Pangu",
+                    " PANGU ",
                     Style::default()
                         .fg(theme::ACCENT)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Role::Tool => (
-                    " Tool",
+                    " TOOL ",
                     Style::default()
                         .fg(theme::WARNING)
                         .add_modifier(Modifier::BOLD),
@@ -213,7 +213,10 @@ impl<'a> ChatView<'a> {
                 Role::User => {
                     // User messages: plain text
                     for line in msg.content.lines() {
-                        lines.push(Line::from(line.to_string()));
+                        lines.push(Line::from(Span::styled(
+                            format!("› {line}"),
+                            Style::default().fg(theme::USER_COLOR),
+                        )));
                     }
                 }
                 Role::Assistant => {
@@ -254,27 +257,43 @@ impl<'a> ChatView<'a> {
                         }
                     } else if msg.content.contains("Error:") {
                         // Error result
+                        lines.push(Line::from(Span::styled(
+                            "┌─ tool error",
+                            Style::default().fg(theme::ERROR).add_modifier(Modifier::BOLD),
+                        )));
                         for line in msg.content.lines() {
                             lines.push(Line::from(Span::styled(
-                                line.to_string(),
+                                format!("│ {line}"),
                                 Style::default().fg(theme::ERROR),
                             )));
                         }
+                        lines.push(Line::from(Span::styled(
+                            "└─",
+                            Style::default().fg(theme::ERROR),
+                        )));
                     } else {
                         // Normal tool result
+                        lines.push(Line::from(Span::styled(
+                            "┌─ tool output",
+                            Style::default().fg(theme::SUCCESS).add_modifier(Modifier::BOLD),
+                        )));
                         for line in msg.content.lines() {
                             if line.starts_with("[Tool:") {
                                 lines.push(Line::from(Span::styled(
-                                    line.to_string(),
+                                    format!("│ {line}"),
                                     Style::default().fg(theme::SUCCESS),
                                 )));
                             } else {
                                 lines.push(Line::from(Span::styled(
-                                    line.to_string(),
+                                    format!("│ {line}"),
                                     Style::default().fg(theme::MUTED),
                                 )));
                             }
                         }
+                        lines.push(Line::from(Span::styled(
+                            "└─",
+                            Style::default().fg(theme::SUCCESS),
+                        )));
                     }
                 }
                 Role::System => {}
@@ -287,16 +306,26 @@ impl<'a> ChatView<'a> {
         // Add current streaming response if any
         if !self.current_response.is_empty() || self.is_generating {
             lines.push(Line::from(vec![Span::styled(
-                " Pangu".to_string(),
+                " PANGU ".to_string(),
                 Style::default()
                     .fg(theme::ACCENT)
                     .add_modifier(Modifier::BOLD),
             )]));
 
-            // Render streaming response
+            // Render streaming response. While generating, use a lightweight plain
+            // renderer to keep token updates smooth and defer markdown parsing.
             if !self.current_response.is_empty() {
-                let rendered = self.renderer.render(self.current_response);
-                lines.extend(rendered);
+                if self.is_generating {
+                    for line in self.current_response.lines() {
+                        lines.push(Line::from(Span::styled(
+                            line.to_string(),
+                            Style::default().fg(theme::ACCENT),
+                        )));
+                    }
+                } else {
+                    let rendered = self.renderer.render(self.current_response);
+                    lines.extend(rendered);
+                }
             }
 
             // Show animated cursor while generating
@@ -340,7 +369,7 @@ impl Widget for ChatView<'_> {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(theme::MUTED))
-            .title(" Chat ");
+            .title(" Conversation ");
 
         let paragraph = Paragraph::new(lines)
             .block(block)

@@ -9,22 +9,26 @@ filename = "devstral-small-2-q4.gguf"
 # Number of layers to offload to GPU (0 = CPU only, -1 = all)
 n_gpu_layers = -1
 # Context window size (smaller = faster, model supports up to 131K)
-context_size = 8192
+context_size = 4096
 # Temperature for sampling (0.0 = deterministic, higher = more random)
-temperature = 0.2
+temperature = 0.15
 # Top-p sampling
 top_p = 0.95
+# Maximum output tokens per assistant turn (lower = faster completion)
+max_output_tokens = 1024
+# Strip orchestration and run direct chat -> LLM -> response flow
+fast_chat_only = false
 
 [ui]
 # Frames per second for rendering
-frame_rate = 30.0
+frame_rate = 60.0
 # Ticks per second for updates
-tick_rate = 4.0
+tick_rate = 20.0
 
 [rag]
 # Maximum RAG messages to retrieve from history (fewer = faster)
-max_rag_messages = 5
+max_rag_messages = 2
 # Maximum recent messages to include in context
-max_recent_messages = 20
+max_recent_messages = 8
 # Maximum sessions to keep in history (cleanup threshold)
 max_sessions = 1000

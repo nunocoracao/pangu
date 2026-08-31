@@ -35,6 +35,20 @@ pub struct ModelSettings {
     pub temperature: f32,
     /// Top-p sampling parameter
     pub top_p: f32,
+    /// Maximum output tokens per assistant turn
+    #[serde(default = "default_max_output_tokens")]
+    pub max_output_tokens: usize,
+    /// Strip extra orchestration and use direct chat->LLM->response flow
+    #[serde(default = "default_fast_chat_only")]
+    pub fast_chat_only: bool,
+}
+
+fn default_max_output_tokens() -> usize {
+    1024
+}
+
+fn default_fast_chat_only() -> bool {
+    false
 }
 
 impl Default for ModelSettings {
@@ -43,9 +57,11 @@ impl Default for ModelSettings {
             hf_repo: "nunocoracao/pangu".to_string(),
             filename: "devstral-small-2-q4.gguf".to_string(),
             n_gpu_layers: -1,
-            context_size: 8192, // Model supports up to 131K, but 8K is memory-friendly
+            context_size: 4096, // Faster default on consumer Apple Silicon
             temperature: 0.15,
             top_p: 0.95,
+            max_output_tokens: default_max_output_tokens(),
+            fast_chat_only: default_fast_chat_only(),
         }
     }
 }
@@ -81,8 +97,8 @@ pub struct UiSettings {
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
-            frame_rate: 30.0,
-            tick_rate: 4.0,
+            frame_rate: 60.0,
+            tick_rate: 20.0,
         }
     }
 }
@@ -101,8 +117,8 @@ pub struct RagSettings {
 impl Default for RagSettings {
     fn default() -> Self {
         Self {
-            max_rag_messages: 5,
-            max_recent_messages: 15,
+            max_rag_messages: 2,
+            max_recent_messages: 8,
             max_sessions: 100,
         }
     }

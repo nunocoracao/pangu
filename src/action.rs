@@ -64,6 +64,8 @@ pub enum Action {
     },
     /// Clear the current session/conversation
     ClearSession,
+    /// Show local slash-command help in chat
+    ShowHelp,
     /// No-op (for unhandled events)
     None,
 }

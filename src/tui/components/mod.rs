@@ -1,9 +1,11 @@
+mod activity_panel;
 pub mod chat_view;
 mod header;
 mod input_box;
 mod loading_screen;
 mod status_bar;
 
+pub use activity_panel::ActivityPanel;
 pub use chat_view::ChatView;
 pub use header::{Header, header_height};
 pub use input_box::InputBox;

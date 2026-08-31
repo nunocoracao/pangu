@@ -235,7 +235,7 @@ impl Widget for StatusBar<'_> {
                 msg.clone(),
                 Style::default().fg(theme::ERROR),
             ),
-            AppState::AwaitingPermission(_) => (
+            AppState::AwaitingPermission => (
                 "Awaiting permission...".to_string(),
                 Style::default()
                     .fg(theme::WARNING)

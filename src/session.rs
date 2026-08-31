@@ -127,6 +127,7 @@ impl SessionManager {
     }
 
     /// Get the session file path
+    #[allow(dead_code)]
     pub fn session_path(&self) -> &Path {
         &self.session_path
     }

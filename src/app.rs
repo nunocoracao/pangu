@@ -62,9 +62,20 @@ impl ChatViewCache {
             return true;
         }
 
-        // Check if current response changed
+        // Check if current response changed.
+        // During generation, refresh frequently for smooth streaming while
+        // still avoiding a full reformat for every single character.
         if current_response.len() != self.current_response_len {
-            return true;
+            if !is_generating {
+                return true;
+            }
+
+            let delta = current_response
+                .len()
+                .abs_diff(self.current_response_len);
+            if delta >= 8 || tick.wrapping_sub(self.cached_tick) >= 1 {
+                return true;
+            }
         }
 
         // Check if generating state changed
@@ -72,8 +83,8 @@ impl ChatViewCache {
             return true;
         }
 
-        // During generation or loading, update periodically for animations (every 2 ticks)
-        if (is_generating || is_loading) && tick.wrapping_sub(self.cached_tick) >= 2 {
+        // During generation or loading, update periodically for animations.
+        if (is_generating || is_loading) && tick.wrapping_sub(self.cached_tick) >= 1 {
             return true;
         }
 
@@ -100,15 +111,6 @@ impl ChatViewCache {
     }
 }
 
-/// Pending tool call awaiting permission
-#[derive(Debug, Clone)]
-pub struct PendingToolCall {
-    pub name: String,
-    pub params: std::collections::HashMap<String, String>,
-    pub path: String,
-    pub is_write: bool,
-}
-
 /// Application state enum
 #[derive(Debug, Clone)]
 pub enum AppState {
@@ -121,7 +123,7 @@ pub enum AppState {
     /// Loading the model into llama-server
     Loading,
     /// Awaiting user permission for a tool call
-    AwaitingPermission(PendingToolCall),
+    AwaitingPermission,
     /// Executing a tool
     ExecutingTool(String),
     /// Error state
@@ -294,8 +296,6 @@ pub struct App {
     pub total_input_tokens: usize,
     /// Total output tokens received this session
     pub total_output_tokens: usize,
-    /// Queue of pending tool calls to execute
-    pub pending_tool_calls: std::collections::VecDeque<crate::tools::ToolCall>,
     /// Selected permission option (0=Allow Once, 1=Always, 2=Deny)
     pub permission_selection: usize,
 }
@@ -327,7 +327,6 @@ impl App {
             session_start: Instant::now(),
             total_input_tokens: 0,
             total_output_tokens: 0,
-            pending_tool_calls: std::collections::VecDeque::new(),
             permission_selection: 0,
         }
     }
@@ -584,9 +583,9 @@ impl App {
     }
 
     /// Set awaiting permission state
-    pub fn set_awaiting_permission(&mut self, pending: PendingToolCall) {
+    pub fn set_awaiting_permission(&mut self) {
         self.permission_selection = 0; // Reset to "Allow Once"
-        self.state = AppState::AwaitingPermission(pending);
+        self.state = AppState::AwaitingPermission;
     }
 
     /// Set executing tool state
@@ -605,11 +604,13 @@ impl App {
     }
 
     /// Cycle permission selection (for keyboard navigation)
+    #[allow(dead_code)]
     pub fn next_permission_option(&mut self) {
         self.permission_selection = (self.permission_selection + 1) % 3;
     }
 
     /// Cycle permission selection backwards
+    #[allow(dead_code)]
     pub fn prev_permission_option(&mut self) {
         self.permission_selection = if self.permission_selection == 0 {
             2
@@ -619,11 +620,13 @@ impl App {
     }
 
     /// Check if awaiting permission
+    #[allow(dead_code)]
     pub fn is_awaiting_permission(&self) -> bool {
-        matches!(self.state, AppState::AwaitingPermission(_))
+        matches!(self.state, AppState::AwaitingPermission)
     }
 
     /// Check if executing tool
+    #[allow(dead_code)]
     pub fn is_executing_tool(&self) -> bool {
         matches!(self.state, AppState::ExecutingTool(_))
     }
